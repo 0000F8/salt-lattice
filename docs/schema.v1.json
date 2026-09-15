@@ -1,0 +1,766 @@
+{
+  "compartments": [
+    "identity",
+    "health",
+    "finances",
+    "preferences",
+    "relationships",
+    "schedule",
+    "work",
+    "system"
+  ],
+  "links": [
+    {
+      "from": [
+        "identity.person",
+        "relationships.person"
+      ],
+      "name": "attends",
+      "to": [
+        "schedule.event"
+      ]
+    },
+    {
+      "from": [
+        "identity.person",
+        "relationships.person"
+      ],
+      "name": "works_with",
+      "to": [
+        "identity.person",
+        "relationships.person"
+      ]
+    },
+    {
+      "from": [
+        "preferences.food.cuisine",
+        "preferences.food.dish",
+        "preferences.music.genre",
+        "preferences.music.artist",
+        "preferences.travel.style",
+        "preferences.travel.place"
+      ],
+      "name": "prefers_over",
+      "to": [
+        "preferences.food.cuisine",
+        "preferences.food.dish",
+        "preferences.music.genre",
+        "preferences.music.artist",
+        "preferences.travel.style",
+        "preferences.travel.place"
+      ]
+    },
+    {
+      "from": [
+        "relationships.person"
+      ],
+      "name": "related_to",
+      "to": [
+        "relationships.person"
+      ]
+    },
+    {
+      "from": [
+        "identity.person",
+        "relationships.person"
+      ],
+      "name": "lives_at",
+      "to": [
+        "identity.location"
+      ]
+    },
+    {
+      "from": [
+        "identity.person",
+        "relationships.person"
+      ],
+      "name": "works_at",
+      "to": [
+        "work.employer"
+      ]
+    }
+  ],
+  "types": [
+    {
+      "compartment": "identity",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "date",
+          "name": "birthday",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "pronouns",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "languages",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "identity.person",
+      "parent": null
+    },
+    {
+      "compartment": "identity",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "enum",
+          "name": "kind",
+          "required": true,
+          "values": [
+            "home",
+            "work",
+            "other"
+          ]
+        },
+        {
+          "kind": "text",
+          "name": "city",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "country",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "identity.location",
+      "parent": null
+    },
+    {
+      "compartment": "identity",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "enum",
+          "name": "kind",
+          "required": true,
+          "values": [
+            "email",
+            "phone",
+            "handle"
+          ]
+        },
+        {
+          "kind": "text",
+          "name": "value",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "identity.contact_channel",
+      "parent": null
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.food",
+      "parent": null
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "number",
+          "name": "strength",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.food.cuisine",
+      "parent": "preferences.food"
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.food.dish",
+      "parent": "preferences.food"
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "enum",
+          "name": "kind",
+          "required": true,
+          "values": [
+            "allergy",
+            "diet",
+            "dislike"
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "severity",
+          "required": false,
+          "values": [
+            "mild",
+            "moderate",
+            "severe"
+          ]
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.food.restriction",
+      "parent": "preferences.food"
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.music",
+      "parent": null
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.music.genre",
+      "parent": "preferences.music"
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.music.artist",
+      "parent": "preferences.music"
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.travel",
+      "parent": null
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.travel.style",
+      "parent": "preferences.travel"
+    },
+    {
+      "compartment": "preferences",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "preferences.travel.place",
+      "parent": "preferences.travel"
+    },
+    {
+      "compartment": "relationships",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "enum",
+          "name": "relation",
+          "required": false,
+          "values": [
+            "partner",
+            "family",
+            "friend",
+            "colleague",
+            "other"
+          ]
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "relationships.person",
+      "parent": null
+    },
+    {
+      "compartment": "relationships",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "value",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "relationships.person.detail",
+      "parent": "relationships.person"
+    },
+    {
+      "compartment": "relationships",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "species",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "relationships.pet",
+      "parent": null
+    },
+    {
+      "compartment": "schedule",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "enum_list",
+          "name": "days",
+          "required": false,
+          "values": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ]
+        },
+        {
+          "kind": "text",
+          "name": "time",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "schedule.routine",
+      "parent": null
+    },
+    {
+      "compartment": "schedule",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "date",
+          "name": "starts",
+          "required": false
+        },
+        {
+          "kind": "date",
+          "name": "ends",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "place",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "schedule.event",
+      "parent": null
+    },
+    {
+      "compartment": "work",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "city",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "work.employer",
+      "parent": null
+    },
+    {
+      "compartment": "work",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "date",
+          "name": "since",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "work.role",
+      "parent": null
+    },
+    {
+      "compartment": "work",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "work.project",
+      "parent": null
+    },
+    {
+      "compartment": "health",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "date",
+          "name": "since",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "health.condition",
+      "parent": null
+    },
+    {
+      "compartment": "health",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "enum",
+          "name": "severity",
+          "required": false,
+          "values": [
+            "mild",
+            "moderate",
+            "severe"
+          ]
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "health.allergy",
+      "parent": null
+    },
+    {
+      "compartment": "health",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "dose",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "schedule",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "health.medication",
+      "parent": null
+    },
+    {
+      "compartment": "finances",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "number",
+          "name": "amount",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "currency",
+          "required": true
+        },
+        {
+          "kind": "enum",
+          "name": "period",
+          "required": false,
+          "values": [
+            "weekly",
+            "monthly",
+            "yearly"
+          ]
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "finances.budget",
+      "parent": null
+    },
+    {
+      "compartment": "finances",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "number",
+          "name": "amount",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "currency",
+          "required": true
+        },
+        {
+          "kind": "date",
+          "name": "by",
+          "required": false
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "finances.goal",
+      "parent": null
+    },
+    {
+      "compartment": "finances",
+      "fields": [
+        {
+          "kind": "text",
+          "name": "name",
+          "required": true
+        },
+        {
+          "kind": "number",
+          "name": "amount",
+          "required": true
+        },
+        {
+          "kind": "text",
+          "name": "currency",
+          "required": true
+        },
+        {
+          "kind": "enum",
+          "name": "period",
+          "required": false,
+          "values": [
+            "weekly",
+            "monthly",
+            "yearly"
+          ]
+        },
+        {
+          "kind": "text",
+          "name": "note",
+          "required": false
+        }
+      ],
+      "name": "finances.subscription",
+      "parent": null
+    }
+  ],
+  "version": 1
+}

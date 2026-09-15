@@ -4,6 +4,11 @@ dist/
 pkg/
 .env
 
+# Playwright output (traces, screenshots, and the per-browser perf-gate
+# JSON scripts/write-gates.mjs consolidates into docs/GATES.md).
+test-results/
+playwright-report/
+
 # OMC scratch state. Created relative to the shell cwd, so it can appear in
 # any repo. salt-deploy refuses to deploy a dirty tree, so an untracked stray
 # here silently blocks a deploy.

@@ -1,0 +1,19 @@
+{
+  "name": "lattice",
+  "private": true,
+  "type": "module",
+  "description": "Lattice: wasm-bindgen wrapper + browser worker/client (see docs/DESIGN.md).",
+  "scripts": {
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "size": "node scripts/check-size.mjs",
+    "export-schema": "node scripts/export-schema.mjs",
+    "test": "vitest run web/test/",
+    "test:browsers": "playwright test -c web/playwright.config.js",
+    "sync-to-fe": "node scripts/sync-to-fe.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.48.0",
+    "vite": "^7.0.0",
+    "vitest": "^5.0.0"
+  }
+}
