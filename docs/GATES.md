@@ -1,6 +1,6 @@
 # Gates (docs/DESIGN.md §1, §5, §10)
 
-Generated 2026-09-15T09:28:33.407Z by `scripts/write-gates.mjs` (Playwright globalTeardown).
+Generated 2026-09-15T10:11:52.325Z by `scripts/write-gates.mjs` (Playwright globalTeardown).
 
 ## Machine
 
@@ -9,9 +9,9 @@ Generated 2026-09-15T09:28:33.407Z by `scripts/write-gates.mjs` (Playwright glob
 
 ## Wasm size gate (§1: under 300 KB gzip)
 
-- raw: 429010 bytes (419.0 KB)
-- gzip-9: 172759 bytes (168.7 KB) — gate: PASS
-- brotli: 137531 bytes (134.3 KB)
+- raw: 431338 bytes (421.2 KB)
+- gzip-9: 173663 bytes (169.6 KB) — gate: PASS
+- brotli: 138030 bytes (134.8 KB)
 
 ## Open gate (§5: 5,000-node store, first `loadFrame` -> `finishOpen` returning, under 100 ms)
 
@@ -21,9 +21,9 @@ Generated 2026-09-15T09:28:33.407Z by `scripts/write-gates.mjs` (Playwright glob
 
 | Browser | Nodes | loadMs | Gate | wallMs |
 |---|---|---|---|---|
-| chromium | 5000 | 30.20 | PASS | 42.30 |
-| firefox | 5000 | 173.00 | recorded only | 197.00 |
-| webkit | 5000 | 44.00 | PASS | 61.00 |
+| chromium | 5000 | 30.30 | PASS | 42.80 |
+| firefox | 5000 | 167.00 | recorded only | 192.00 |
+| webkit | 5000 | 42.00 | PASS | 53.00 |
 
 ## Caveats
 

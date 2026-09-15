@@ -56,12 +56,20 @@ impl Selector {
         }
     }
 
+    /// Security review B2: `type.*` covers that type's subtree, the same way
+    /// `*` already does in a query path (DESIGN.md §4 — `preferences/food/*`
+    /// means every type starting with `preferences.food`, not only that
+    /// exact type). Before this fix `Selector::Type` matched only the exact
+    /// type, so a narrowing rule like `preferences.food.* = ask` did nothing
+    /// against a broader `preferences.* = auto` rule: every nested type
+    /// (`preferences.food.cuisine`, `.dish`, `.restriction`, ...) still fell
+    /// through to the compartment-level rule and released automatically.
     pub fn matches(&self, type_name: &str, field: &str) -> bool {
         match self {
             Selector::Compartment(c) => schema::compartment_of(type_name)
                 .map(|cc| cc.as_str() == c)
                 .unwrap_or(false),
-            Selector::Type(t) => t == type_name,
+            Selector::Type(t) => type_name == t || type_name.starts_with(&format!("{t}.")),
             Selector::Field(t, f) => t == type_name && f == field,
         }
     }
@@ -95,13 +103,19 @@ fn grant_is_valid_for(grant: &Grant, request: &Request) -> bool {
     grant.revoked.is_none() && grant.agent_fingerprint == request.agent_fingerprint
 }
 
+/// Security review S4: on a specificity tie between two matching rules, the
+/// more restrictive one (`ask`) must win, never `auto`. `Iterator::max_by_key`
+/// returns the *last* maximum, so ranking by `(specificity, is_ask)` — with
+/// `is_ask` as `false < true` — makes an `ask` rule strictly greater than an
+/// `auto` rule at equal specificity regardless of which one appears first in
+/// `grant.rules` or is visited last by the iterator.
 fn best_rule<'a>(grant: &'a Grant, type_name: &str, field: &str) -> Option<&'a GrantRule> {
     grant
         .rules
         .iter()
         .filter_map(|rule| Selector::parse(&rule.selector).map(|sel| (sel, rule)))
         .filter(|(sel, _)| sel.matches(type_name, field))
-        .max_by_key(|(sel, _)| sel.specificity())
+        .max_by_key(|(sel, rule)| (sel.specificity(), rule.mode == GrantMode::Ask))
         .map(|(_, rule)| rule)
 }
 
@@ -281,24 +295,52 @@ pub fn release(
     Ok((payload, entry))
 }
 
-/// `standing_diff(grant_id, since_seq?) -> Option<[Fact]>` (§7). `None` when
-/// the grant is revoked, has no standing, or its standing has expired (R13);
-/// otherwise every accepted field under an `auto` selector whose node was
-/// written after `since_seq`.
+/// The result of a standing push: the facts to send, and the watermark to
+/// pass to `standing_checkpoint` once they're actually sent (security review
+/// S10 — see [`standing_diff`]).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StandingDiffResult {
+    pub facts: Vec<Fact>,
+    pub max_seq: u64,
+}
+
+/// `standing_diff(grant_id, agent_fingerprint, since_seq?) -> Option<StandingDiffResult>`
+/// (§7). `None` when the grant is revoked, has no standing, its standing has
+/// expired (R13), or `agent_fingerprint` doesn't match the grant's (security
+/// review B3); otherwise every accepted field under an `auto` selector whose
+/// node was written after `since_seq`.
+///
+/// `agent_fingerprint` is required, not optional (decided while building):
+/// `evaluate`/`release` already refuse a rotated key via `grant_is_valid_for`,
+/// but nothing stopped a standing push from being computed and sent to
+/// whatever key the caller happened to encrypt for, forever, even after the
+/// agent's key rotated out from under the grant. Making the parameter
+/// required (rather than defaulting it) means a caller cannot forget to
+/// resolve and pass the agent's *current* fingerprint the way the on-demand
+/// path already does.
 ///
 /// `since_seq: None` (decided while building, persisted checkpoint) defaults
 /// to [`Store::default_since_seq`] — the grant's last `standing_checkpoint`,
 /// or its own creation seq if it has never been checkpointed — so a caller
 /// no longer has to track the watermark itself between calls, and that
 /// watermark survives a reload since it's a `system`-compartment record.
+///
+/// `max_seq` (security review S10) is the highest seq actually represented
+/// in `facts` — not the store's global seq counter, which can have moved on
+/// by the time a caller gets around to acking a network round trip later,
+/// silently marking a write that raced the ack as already pushed when it was
+/// never sent. When `facts` is empty, `max_seq` is the `since_seq` baseline
+/// that was used, so it is always safe to pass straight to
+/// `standing_checkpoint` — including as a no-op when nothing changed.
 pub fn standing_diff(
     store: &Store,
     grant_id: &str,
+    agent_fingerprint: &str,
     since_seq: Option<u64>,
     now: u64,
-) -> Option<Vec<Fact>> {
+) -> Option<StandingDiffResult> {
     let grant = store.find_grant(grant_id)?;
-    if grant.revoked.is_some() {
+    if grant.revoked.is_some() || grant.agent_fingerprint != agent_fingerprint {
         return None;
     }
     let standing = grant.standing.as_ref()?;
@@ -315,6 +357,7 @@ pub fn standing_diff(
         .collect();
 
     let mut facts = Vec::new();
+    let mut max_seq = since_seq;
     for node in store.accepted_nodes() {
         if store.is_destroyed(&node.compartment) {
             continue;
@@ -336,8 +379,9 @@ pub fn standing_diff(
                     author: map_author(&node.author),
                     updated: node.updated,
                 });
+                max_seq = max_seq.max(seq);
             }
         }
     }
-    Some(facts)
+    Some(StandingDiffResult { facts, max_seq })
 }

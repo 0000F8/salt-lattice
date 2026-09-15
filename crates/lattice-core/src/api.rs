@@ -63,6 +63,11 @@ fn default_disclosure_kind() -> DisclosureKind {
 #[derive(Debug, Deserialize)]
 struct StandingDiffArgs {
     grant_id: String,
+    /// Required (security review B3): the caller must resolve and pass the
+    /// agent's *current* key fingerprint, the same way it already does for
+    /// `evaluate`/`release`. Not defaulted or made optional on purpose — a
+    /// missing value is a `bad_request` parse error, not a silent bypass.
+    agent_fingerprint: String,
     /// Optional (decided while building): omit or pass `null` to default to
     /// the grant's persisted checkpoint, or its creation seq if none exists
     /// yet — see `access::standing_diff`.
@@ -202,6 +207,7 @@ fn dispatch(store: &mut Store, op: &str, args: &str) -> LatticeResult<serde_json
             Ok(to_value(&access::standing_diff(
                 store,
                 &a.grant_id,
+                &a.agent_fingerprint,
                 a.since_seq,
                 now,
             )))

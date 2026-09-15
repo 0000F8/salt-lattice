@@ -610,9 +610,9 @@ fn r11_destroyed_compartment_writes_refused_and_never_disclosed() {
         evaluation.auto
     );
 
-    let diff = access::standing_diff(&store, &grant_id, None, store.now());
+    let diff = access::standing_diff(&store, &grant_id, "fp-1", None, store.now());
     assert!(
-        diff.map(|facts| facts.is_empty()).unwrap_or(true),
+        diff.map(|d| d.facts.is_empty()).unwrap_or(true),
         "destroyed-compartment nodes must never appear in a standing diff either"
     );
 }
@@ -746,7 +746,7 @@ fn r13_expired_standing_only_affects_standing_diff() {
         .unwrap();
 
     let now2 = store.now();
-    assert!(access::standing_diff(&store, &grant.id, None, now2).is_none());
+    assert!(access::standing_diff(&store, &grant.id, "fp-1", None, now2).is_none());
 
     let request = Request {
         id: "r_1".to_string(),
@@ -1325,35 +1325,46 @@ fn standing_diff_revoked_and_since_seq_round_trip() {
     let seq_after_a = store.seq_of(&a.id).unwrap();
     let now = store.now();
 
-    let first_diff = access::standing_diff(&store, &grant.id, Some(0), now).unwrap();
-    assert_eq!(first_diff.len(), 1);
-    assert_eq!(first_diff[0].value, serde_json::json!("Sushi"));
+    let first_diff = access::standing_diff(&store, &grant.id, "fp-1", Some(0), now).unwrap();
+    assert_eq!(first_diff.facts.len(), 1);
+    assert_eq!(first_diff.facts[0].value, serde_json::json!("Sushi"));
+    assert_eq!(
+        first_diff.max_seq, seq_after_a,
+        "max_seq is the seq of the fact actually returned"
+    );
 
     // Nothing changed since: passing the last-sent seq back yields nothing.
-    let empty_diff = access::standing_diff(&store, &grant.id, Some(seq_after_a), now).unwrap();
+    let empty_diff =
+        access::standing_diff(&store, &grant.id, "fp-1", Some(seq_after_a), now).unwrap();
     assert!(
-        empty_diff.is_empty(),
+        empty_diff.facts.is_empty(),
         "no double-send when nothing changed since the last push"
+    );
+    assert_eq!(
+        empty_diff.max_seq, seq_after_a,
+        "an empty diff's max_seq is just the since_seq baseline"
     );
 
     let b = put(&mut store, "preferences.food", None, "Ramen", you());
     let seq_after_b = store.seq_of(&b.id).unwrap();
     let second_diff =
-        access::standing_diff(&store, &grant.id, Some(seq_after_a), store.now()).unwrap();
+        access::standing_diff(&store, &grant.id, "fp-1", Some(seq_after_a), store.now()).unwrap();
     assert_eq!(
-        second_diff.len(),
+        second_diff.facts.len(),
         1,
         "only the record written after the last-sent seq, not both"
     );
-    assert_eq!(second_diff[0].value, serde_json::json!("Ramen"));
+    assert_eq!(second_diff.facts[0].value, serde_json::json!("Ramen"));
+    assert_eq!(second_diff.max_seq, seq_after_b);
 
     let nothing_new =
-        access::standing_diff(&store, &grant.id, Some(seq_after_b), store.now()).unwrap();
-    assert!(nothing_new.is_empty());
+        access::standing_diff(&store, &grant.id, "fp-1", Some(seq_after_b), store.now()).unwrap();
+    assert!(nothing_new.facts.is_empty());
+    assert_eq!(nothing_new.max_seq, seq_after_b);
 
     // Revoked -> None, independent of standing/expiry.
     store.revoke_grant(&grant.id).unwrap();
-    assert!(access::standing_diff(&store, &grant.id, None, store.now()).is_none());
+    assert!(access::standing_diff(&store, &grant.id, "fp-1", None, store.now()).is_none());
 }
 
 /// Persisted standing checkpoint (team-lead follow-up, "Decided while
@@ -1389,22 +1400,30 @@ fn standing_checkpoint_persists_across_reload() {
 
     // No since_seq given: defaults to the grant's creation seq (before
     // `pushed` was written), so the new fact shows up.
-    let diff = access::standing_diff(&store, &grant.id, None, store.now()).unwrap();
-    assert_eq!(diff.len(), 1);
-    assert_eq!(diff[0].value, serde_json::json!("Sushi"));
+    let diff = access::standing_diff(&store, &grant.id, "fp-1", None, store.now()).unwrap();
+    assert_eq!(diff.facts.len(), 1);
+    assert_eq!(diff.facts[0].value, serde_json::json!("Sushi"));
+    assert_eq!(
+        diff.max_seq, pushed_seq,
+        "max_seq is what the worker should ack, per S10"
+    );
 
-    // The push "succeeds"; the worker checkpoints what it just sent.
+    // The push "succeeds"; the worker checkpoints what it just sent — using
+    // the diff's own `max_seq`, not the store's global seq counter (S10).
     store
-        .set_standing_checkpoint(&grant.id, pushed_seq)
+        .set_standing_checkpoint(&grant.id, diff.max_seq)
         .unwrap();
     assert_eq!(store.list_grants()[0].last_pushed_seq, Some(pushed_seq));
 
     // Same store, no explicit since_seq: nothing new since the checkpoint.
-    let diff_again = access::standing_diff(&store, &grant.id, None, store.now()).unwrap();
+    let diff_again = access::standing_diff(&store, &grant.id, "fp-1", None, store.now()).unwrap();
     assert!(
-        diff_again.is_empty(),
+        diff_again.facts.is_empty(),
         "default baseline must move to the new checkpoint immediately"
     );
+
+    // A rotated key must not receive the standing push either (B3).
+    assert!(access::standing_diff(&store, &grant.id, "fp-rotated", None, store.now()).is_none());
 
     // Reload into a fresh store from the same frames (the actual regression:
     // this used to lose the watermark and re-announce "Sushi").
@@ -1424,9 +1443,9 @@ fn standing_checkpoint_persists_across_reload() {
         "the checkpoint itself must survive reload"
     );
     let diff_after_reload =
-        access::standing_diff(&reloaded, &grant.id, None, reloaded.now()).unwrap();
+        access::standing_diff(&reloaded, &grant.id, "fp-1", None, reloaded.now()).unwrap();
     assert!(
-        diff_after_reload.is_empty(),
+        diff_after_reload.facts.is_empty(),
         "reload must not re-announce a fact already pushed before restart"
     );
 }
@@ -1456,15 +1475,408 @@ fn standing_diff_defaults_to_grant_creation_seq_when_uncheckpointed() {
         )
         .unwrap();
 
-    let diff = access::standing_diff(&store, &grant.id, None, store.now()).unwrap();
+    let diff = access::standing_diff(&store, &grant.id, "fp-1", None, store.now()).unwrap();
     assert!(
-        diff.is_empty(),
-        "data written before the grant existed must not appear in its first standing diff, got {diff:?}"
+        diff.facts.is_empty(),
+        "data written before the grant existed must not appear in its first standing diff, got {:?}",
+        diff.facts
     );
 
     let after = put(&mut store, "preferences.food", None, "Fresh", you());
-    let diff2 = access::standing_diff(&store, &grant.id, None, store.now()).unwrap();
-    assert_eq!(diff2.len(), 1);
-    assert_eq!(diff2[0].value, serde_json::json!("Fresh"));
+    let diff2 = access::standing_diff(&store, &grant.id, "fp-1", None, store.now()).unwrap();
+    assert_eq!(diff2.facts.len(), 1);
+    assert_eq!(diff2.facts[0].value, serde_json::json!("Fresh"));
     let _ = after;
+}
+
+// ------------------------------------------------ security review (round 2)
+
+/// B2: a `type.*` grant rule must cover that type's nested types too, the
+/// same way `*` already works in a query path. Reproduces the review's
+/// probe G: narrowing "Preferences: Auto" down to "Food: Ask" must actually
+/// protect food data instead of the broad compartment rule still winning.
+#[test]
+fn b2_type_wildcard_covers_nested_types() {
+    let mut store = Store::new(env());
+    let food = put(&mut store, "preferences.food", None, "Food", you());
+    store
+        .put_node(PutNodeInput {
+            id: None,
+            type_: "preferences.food.cuisine".to_string(),
+            parent: Some(food.id.clone()),
+            fields: fields(&[
+                ("name", serde_json::json!("Japanese")),
+                ("strength", serde_json::json!(0.9)),
+            ]),
+            author: you(),
+        })
+        .unwrap();
+
+    store
+        .set_grant(
+            "agent-1".to_string(),
+            "fp-1".to_string(),
+            vec![
+                GrantRule {
+                    selector: "preferences.*".to_string(),
+                    mode: GrantMode::Auto,
+                },
+                GrantRule {
+                    selector: "preferences.food.*".to_string(),
+                    mode: GrantMode::Ask,
+                },
+            ],
+            vec![],
+            None,
+        )
+        .unwrap();
+    let request = Request {
+        id: "r_1".to_string(),
+        agent_id: "agent-1".to_string(),
+        agent_fingerprint: "fp-1".to_string(),
+        purpose: "p".to_string(),
+        asks: vec!["preferences.food.cuisine.strength".to_string()],
+        channel: Channel::Private,
+    };
+    let evaluation = access::evaluate(&store, &request).unwrap();
+    assert!(
+        evaluation.auto.is_empty(),
+        "the narrower preferences.food.* rule must beat the broad preferences.* rule, got auto={:?}",
+        evaluation.auto
+    );
+    assert_eq!(
+        evaluation.ask.len(),
+        1,
+        "food data must land on the ask side once narrowed"
+    );
+
+    // A type outside the narrowed subtree (preferences.music) must stay on
+    // the broad auto rule, proving the fix didn't just make everything ask.
+    put(&mut store, "preferences.music", None, "Jazz", you());
+    let request2 = Request {
+        asks: vec!["preferences.music.name".to_string()],
+        ..request
+    };
+    let evaluation2 = access::evaluate(&store, &request2).unwrap();
+    assert_eq!(evaluation2.auto.len(), 1);
+    assert!(evaluation2.ask.is_empty());
+}
+
+/// B3: a standing push must refuse a rotated key, the same way `evaluate`
+/// already does for on-demand requests. Before this fix `standing_diff`
+/// never saw a fingerprint at all.
+#[test]
+fn b3_standing_diff_refuses_a_rotated_fingerprint() {
+    let mut store = Store::new(env());
+    let grant = store
+        .set_grant(
+            "agent-1".to_string(),
+            "fp-original".to_string(),
+            vec![GrantRule {
+                selector: "preferences.food.name".to_string(),
+                mode: GrantMode::Auto,
+            }],
+            vec![],
+            Some(Standing {
+                expires_at: store.now() + 1_000_000,
+            }),
+        )
+        .unwrap();
+    // Written after the grant exists, so it's within the default baseline.
+    put(&mut store, "preferences.food", None, "Sushi", you());
+
+    let with_correct_fp =
+        access::standing_diff(&store, &grant.id, "fp-original", None, store.now());
+    assert!(with_correct_fp.is_some());
+    assert_eq!(with_correct_fp.unwrap().facts.len(), 1);
+
+    let with_rotated_fp = access::standing_diff(&store, &grant.id, "fp-rotated", None, store.now());
+    assert!(
+        with_rotated_fp.is_none(),
+        "a rotated key must not still receive the standing push"
+    );
+}
+
+/// S4: two rules of equal specificity matching the same field, one `ask` and
+/// one `auto`, must resolve to `ask` regardless of declaration order —
+/// ties resolve to the restrictive side, never the permissive one.
+#[test]
+fn s4_specificity_tie_resolves_to_ask() {
+    let mut store = Store::new(env());
+    put(&mut store, "preferences.food", None, "Food", you());
+
+    for (id_suffix, rules) in [
+        (
+            "a",
+            vec![
+                GrantRule {
+                    selector: "preferences.food.name".to_string(),
+                    mode: GrantMode::Ask,
+                },
+                GrantRule {
+                    selector: "preferences.food.name".to_string(),
+                    mode: GrantMode::Auto,
+                },
+            ],
+        ),
+        (
+            "b",
+            vec![
+                GrantRule {
+                    selector: "preferences.food.name".to_string(),
+                    mode: GrantMode::Auto,
+                },
+                GrantRule {
+                    selector: "preferences.food.name".to_string(),
+                    mode: GrantMode::Ask,
+                },
+            ],
+        ),
+    ] {
+        let agent_id = format!("agent-{id_suffix}");
+        let fp = format!("fp-{id_suffix}");
+        store
+            .set_grant(agent_id.clone(), fp.clone(), rules, vec![], None)
+            .unwrap();
+        let request = Request {
+            id: format!("r_{id_suffix}"),
+            agent_id,
+            agent_fingerprint: fp,
+            purpose: "p".to_string(),
+            asks: vec!["preferences.food.name".to_string()],
+            channel: Channel::Private,
+        };
+        let evaluation = access::evaluate(&store, &request).unwrap();
+        assert!(
+            evaluation.auto.is_empty(),
+            "a duplicate-selector tie must never resolve to auto"
+        );
+        assert_eq!(
+            evaluation.ask.len(),
+            1,
+            "a duplicate-selector tie must resolve to ask"
+        );
+    }
+}
+
+/// S5: a selector naming a real compartment but a made-up type must be
+/// refused, even when it ends in an implicit field name (`name`/`note`)
+/// that would otherwise always resolve. Reproduces probes I and J.
+#[test]
+fn s5_typo_type_with_implicit_field_name_is_rejected() {
+    assert!(
+        Selector::parse("preferences.nonexistent.name").is_none(),
+        "a made-up type must not parse as a selector just because the field name is implicit"
+    );
+    assert!(schema::find_field("preferences.nonexistent", "name").is_none());
+    assert!(schema::find_field("preferences.nonexistent", "note").is_none());
+
+    let mut store = Store::new(env());
+    let err = store
+        .set_grant(
+            "agent-1".to_string(),
+            "fp-1".to_string(),
+            vec![GrantRule {
+                selector: "preferences.nonexistent.name".to_string(),
+                mode: GrantMode::Ask,
+            }],
+            vec![],
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_selector");
+}
+
+/// S6: every declared field kind is enforced, not just enum/enum_list.
+#[test]
+fn s6_field_kinds_are_enforced() {
+    let mut store = Store::new(env());
+    // number kind (finances.budget.amount) rejects a string.
+    let err = store
+        .put_node(PutNodeInput {
+            id: None,
+            type_: "finances.budget".to_string(),
+            parent: None,
+            fields: fields(&[
+                ("name", serde_json::json!("Groceries")),
+                ("amount", serde_json::json!("not a number")),
+                ("currency", serde_json::json!("USD")),
+            ]),
+            author: you(),
+        })
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_field_value");
+
+    // bool-typed field: none in the schema today for a top-level type takes
+    // bool directly on write path other than via schema kind check itself —
+    // exercise via a text field given a non-string (an object) instead,
+    // which every text-kind field is exposed to.
+    let err2 = store
+        .put_node(PutNodeInput {
+            id: None,
+            type_: "identity.person".to_string(),
+            parent: None,
+            fields: fields(&[("name", serde_json::json!({"not": "a string"}))]),
+            author: you(),
+        })
+        .unwrap_err();
+    assert_eq!(err2.code, "invalid_field_value");
+
+    // date kind (work.role.since) rejects a number.
+    let err3 = store
+        .put_node(PutNodeInput {
+            id: None,
+            type_: "work.role".to_string(),
+            parent: None,
+            fields: fields(&[
+                ("name", serde_json::json!("Engineer")),
+                ("since", serde_json::json!(20260101)),
+            ]),
+            author: you(),
+        })
+        .unwrap_err();
+    assert_eq!(err3.code, "invalid_field_value");
+}
+
+#[test]
+fn s6_text_value_length_is_capped() {
+    let mut store = Store::new(env());
+    let too_long = "a".repeat(lattice_core::store::MAX_TEXT_LEN + 1);
+    let err = store
+        .put_node(PutNodeInput {
+            id: None,
+            type_: "identity.person".to_string(),
+            parent: None,
+            fields: fields(&[("name", serde_json::json!(too_long))]),
+            author: you(),
+        })
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_field_value");
+
+    // Exactly at the limit is still fine.
+    let at_limit = "a".repeat(lattice_core::store::MAX_TEXT_LEN);
+    store
+        .put_node(PutNodeInput {
+            id: None,
+            type_: "identity.person".to_string(),
+            parent: None,
+            fields: fields(&[("name", serde_json::json!(at_limit))]),
+            author: you(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn s6_field_count_is_capped() {
+    let mut store = Store::new(env());
+    let mut too_many = fields(&[("name", serde_json::json!("Ada"))]);
+    for i in 0..lattice_core::store::MAX_FIELDS_PER_NODE {
+        // identity.person has no field named this, so this is guaranteed to
+        // be rejected as unknown_field first UNLESS the cap trips first —
+        // assert on the cap specifically, so use a real field name that
+        // exists nowhere near this many times isn't possible; instead cap
+        // is checked before per-field validation in `validate_fields`, so
+        // this proves the ordering: too many fields wins even over unknown
+        // field names.
+        too_many.insert(format!("bogus_{i}"), serde_json::json!("x"));
+    }
+    let err = store
+        .put_node(PutNodeInput {
+            id: None,
+            type_: "identity.person".to_string(),
+            parent: None,
+            fields: too_many,
+            author: you(),
+        })
+        .unwrap_err();
+    assert_eq!(err.code, "too_many_fields");
+}
+
+#[test]
+fn s6_trusted_writes_validated_against_compartments() {
+    let mut store = Store::new(env());
+    let err = store
+        .set_grant(
+            "agent-1".to_string(),
+            "fp-1".to_string(),
+            vec![],
+            vec!["not_a_compartment".to_string()],
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_compartment");
+
+    let err2 = store
+        .set_grant(
+            "agent-2".to_string(),
+            "fp-2".to_string(),
+            vec![],
+            vec!["system".to_string()],
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(err2.code, "grant_names_system");
+
+    // A real compartment is still fine.
+    store
+        .set_grant(
+            "agent-3".to_string(),
+            "fp-3".to_string(),
+            vec![],
+            vec!["preferences".to_string()],
+            None,
+        )
+        .unwrap();
+}
+
+/// S10: `standing_diff`'s `max_seq` must reflect only the facts actually
+/// returned, not the store's global seq counter — otherwise a write landing
+/// between computing the diff and acking it gets marked pushed without ever
+/// having been sent.
+#[test]
+fn s10_max_seq_excludes_writes_after_the_diff_was_computed() {
+    let mut store = Store::new(env());
+    let grant = store
+        .set_grant(
+            "agent-1".to_string(),
+            "fp-1".to_string(),
+            vec![GrantRule {
+                selector: "preferences.food.name".to_string(),
+                mode: GrantMode::Auto,
+            }],
+            vec![],
+            Some(Standing {
+                expires_at: store.now() + 1_000_000,
+            }),
+        )
+        .unwrap();
+    let a = put(&mut store, "preferences.food", None, "Sushi", you());
+    let seq_a = store.seq_of(&a.id).unwrap();
+
+    let diff = access::standing_diff(&store, &grant.id, "fp-1", None, store.now()).unwrap();
+    assert_eq!(diff.max_seq, seq_a);
+
+    // A second write races the network round trip to the ack.
+    let b = put(&mut store, "preferences.food", None, "Ramen", you());
+    let seq_b = store.seq_of(&b.id).unwrap();
+    assert!(
+        seq_b > diff.max_seq,
+        "the racing write's seq must be strictly after max_seq"
+    );
+
+    // The worker acks using the diff's own max_seq (S10's fix), not
+    // stats().seq (which would already include the racing write).
+    store
+        .set_standing_checkpoint(&grant.id, diff.max_seq)
+        .unwrap();
+
+    // The racing write must still show up on the next diff.
+    let next_diff = access::standing_diff(&store, &grant.id, "fp-1", None, store.now()).unwrap();
+    assert_eq!(
+        next_diff.facts.len(),
+        1,
+        "the write that raced the ack must not be silently marked pushed"
+    );
+    assert_eq!(next_diff.facts[0].value, serde_json::json!("Ramen"));
+    assert_eq!(next_diff.max_seq, seq_b);
 }

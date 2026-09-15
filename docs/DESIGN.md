@@ -341,3 +341,66 @@ cross-agent contract changes on this branch.
   call sites reading `grant.id`/`grant.agent_id`/etc. off a `list_grants()` result needed no changes).
   Read-only / informational; `standing_diff`'s own default doesn't go through this field, it reads the same
   underlying checkpoint index directly.
+
+## Decided while building, round 4 (adversarial security review, 2026-09-15)
+
+The security review at the crate layer found two blockers (B2, B3) and three should-fix items (S4, S5, S6,
+S10) whose fix or half-fix lives in `crates/lattice-core`; the rest of that review's findings are `web/`,
+`salt-fe`, `salt-api` or `salt-agent-sdk` items outside this crate. `cargo test -p lattice-core` is green (42
+tests: the prior 33 plus 9 new — one per finding below, plus a dedicated `s6_*` test per validation added),
+`cargo fmt` and `cargo clippy --workspace --all-targets -- -D warnings` are both clean. Verified each new
+test actually depends on its fix (not just asserts something already true) by stashing the four changed
+source files and confirming `tests/rules.rs` fails to even compile without them (the new tests call
+`access::standing_diff` with its new signature/return type and reference `store::MAX_TEXT_LEN`/
+`MAX_FIELDS_PER_NODE`, none of which existed before this round) — the review's own probes had already
+demonstrated B2/S4/S5's wrong runtime output against the pre-fix code, so between the two, every fix here is
+shown to matter, not just asserted to.
+
+- **B2 — `Selector::Type(t)` now matches its subtree**: `type_name == t || type_name.starts_with(&format!("{t}."))`,
+  matching how `*` already works in a query path (§4 — `preferences/food/*` means every type starting with
+  `preferences.food`, not only that exact type). Before this fix, a narrowing rule like
+  `preferences.food.* = ask` did nothing against a broader `preferences.* = auto` rule: every nested type
+  (`preferences.food.cuisine`, `.dish`, `.restriction`, including allergies) still matched only the
+  compartment-level rule and released automatically. This is a correction to this round's own earlier
+  description of `type.*` (round 1's schema/access notes described "all fields of that exact type" — that
+  was the bug, not the spec).
+- **B3 — `standing_diff` now requires `agent_fingerprint`**, and returns `None` when it doesn't match the
+  grant's, the same `revoked.is_none() && fingerprint == request.fingerprint` shape `evaluate` already uses.
+  Made the parameter *required* rather than optional-with-a-permissive-default on purpose: an on-demand
+  request already refuses a rotated key via `grant_is_valid_for`, but nothing stopped a standing push from
+  being computed and sent to whatever key the caller happened to encrypt for, forever, past a key rotation —
+  and a required parameter means a caller cannot forget to resolve and pass the agent's *current* fingerprint
+  (not the grant's own stored one, which trivially "matches itself" and defeats the check).
+- **S4 — a specificity tie between an `ask` rule and an `auto` rule now always resolves to `ask`.**
+  `best_rule`'s ranking key changed from `sel.specificity()` to `(sel.specificity(), rule.mode == GrantMode::Ask)`;
+  since `Iterator::max_by_key` returns the *last* maximum and `false < true`, an `ask` rule is now strictly
+  greater than an `auto` rule at equal specificity regardless of which one a grant lists first. This can only
+  arise from a duplicate or malformed grant (the UI has no way to construct two rules on the identical
+  selector), but the crate shouldn't depend on that either.
+- **S5 — `find_field` now refuses an unknown type outright**, even for the two implicit field names. Before
+  this fix, `find_field("preferences.nonexistent", "name")` returned `Some(NAME_FIELD)` without checking
+  `preferences.nonexistent` is real, so `Selector::parse("preferences.nonexistent.name")` "validated" — a
+  typo'd narrowing `ask` selector silently matched nothing while a broader `auto` rule kept releasing, the
+  same failure shape as B2.
+- **S6 — every declared field kind is now enforced, and two caps were added.** `validate_value` handled only
+  `Enum`/`EnumList` before this fix and let `Text`/`Number`/`Bool`/`Date` fall through unchecked, so any JSON
+  value at all (an object, an array, ...) was accepted for those. This mattered because a trusted-write
+  agent's node lands `Accepted` with no person in the loop and its author is masked to `agent` on release
+  (R7) — an unvalidated field was a usable, attributed-to-nobody-specific channel between agents through the
+  person's own store. Fixed: `Text`/`Date` require a string, `Number` an f64, `Bool` a bool (all
+  `invalid_field_value` otherwise). Two caps, both documented here per the review's request: a `Text`/`Date`
+  value is refused past **`store::MAX_TEXT_LEN` = 2,000 characters**, and a node is refused past
+  **`store::MAX_FIELDS_PER_NODE` = 32 fields** (`too_many_fields`) — long enough for any legitimate value,
+  short enough that a single field or a bloated node can't become an unbounded channel or an unbounded write.
+  Separately, `set_grant` validates `trusted_writes` against the compartment enum now too (`invalid_compartment`
+  for a non-compartment string) and refuses `"system"` specifically (`grant_names_system`) the same way a
+  rule selector already was — it was previously validated server-side only, and the crate shouldn't rely on
+  that.
+- **S10 — `standing_diff` returns `{facts, max_seq}`, and `max_seq` (not the store's global seq counter) is
+  the value `standing_checkpoint` documents as correct to ack.** `max_seq` is the highest seq actually
+  represented in the returned `facts` — computed by tracking a running max only when a fact is pushed, seeded
+  at the resolved `since_seq` so an empty diff still returns a safe, no-op value. Before this fix a caller
+  reading `stats().seq` (the store's live global counter) to build the ack value could mark a write that
+  landed during the network round trip to the ack as already pushed, when it was never actually sent — the
+  new contract makes that race structurally impossible: the value that gets acked can never be newer than
+  what was actually in the payload that went out.

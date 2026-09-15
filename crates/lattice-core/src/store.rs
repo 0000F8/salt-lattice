@@ -715,6 +715,29 @@ impl Store {
             }
         }
 
+        // Security review S6: `trusted_writes` was never validated at all —
+        // only `rules` was, so `trusted_writes: ["system"]` (or a plain
+        // typo) was silently accepted. Harmless today only because no
+        // schema type lives under `system` and the server also checks this;
+        // the crate should not depend on either.
+        for compartment in &trusted_writes {
+            match schema::Compartment::parse(compartment) {
+                None => {
+                    return Err(Error::new(
+                        "invalid_compartment",
+                        format!("'{compartment}' is not a compartment"),
+                    ))
+                }
+                Some(schema::Compartment::System) => {
+                    return Err(Error::new(
+                        "grant_names_system",
+                        "a grant may never trust writes into the system compartment",
+                    ))
+                }
+                Some(_) => {}
+            }
+        }
+
         if let Some(prev_id) = self.current_grant_by_agent.get(&agent_id).cloned() {
             let now = self.now();
             self.commit(
@@ -917,12 +940,36 @@ fn validate_parent(
     }
 }
 
+/// Security review S6: a node's field count is capped so a write (including
+/// a trusted agent's, which lands `Accepted` with no person in the loop)
+/// cannot balloon a compartment's frame arbitrarily. Documented in
+/// DESIGN.md.
+pub const MAX_FIELDS_PER_NODE: usize = 32;
+
+/// Security review S6: a `text`/`date` value is capped in length for the
+/// same reason. Long enough for any legitimate note; short enough that a
+/// trusted-write agent can't use a single field as an unbounded channel.
+/// Documented in DESIGN.md.
+pub const MAX_TEXT_LEN: usize = 2_000;
+
 /// Closed-schema field validation (R1): every field name must be declared on
 /// the type (or be the implicit `name`/`note`), every `required` field must
-/// be present, and an `enum`/`enum_list` value must be one of the allowed
-/// values.
+/// be present, every value must match its declared kind (security review
+/// S6 — `text`/`number`/`bool`/`date` were previously unchecked, so any
+/// JSON value passed for them), and an `enum`/`enum_list` value must be one
+/// of the allowed values. Also caps total field count (S6).
 fn validate_fields(type_name: &str, fields: &Fields) -> LatticeResult<()> {
     let type_def = schema::find_type(type_name).expect("caller already checked the type exists");
+
+    if fields.len() > MAX_FIELDS_PER_NODE {
+        return Err(Error::new(
+            "too_many_fields",
+            format!(
+                "a node may have at most {MAX_FIELDS_PER_NODE} fields, got {}",
+                fields.len()
+            ),
+        ));
+    }
 
     for (name, value) in fields {
         let field_def = schema::find_field(type_name, name).ok_or_else(|| {
@@ -951,8 +998,48 @@ fn validate_fields(type_name: &str, fields: &Fields) -> LatticeResult<()> {
     Ok(())
 }
 
+fn check_string_len(s: &str, field_name: &str) -> LatticeResult<()> {
+    if s.chars().count() > MAX_TEXT_LEN {
+        return Err(Error::new(
+            "invalid_field_value",
+            format!("'{field_name}' exceeds the {MAX_TEXT_LEN} character limit"),
+        ));
+    }
+    Ok(())
+}
+
+/// Security review S6: every declared kind is now actually enforced —
+/// before this fix, `Text`/`Number`/`Bool`/`Date` fell through a bare
+/// `_ => {}` and accepted any JSON value at all (an object, an array, a
+/// number where text was declared, ...). `Enum`/`EnumList` were already
+/// checked.
 fn validate_value(field_def: &schema::FieldDef, value: &serde_json::Value) -> LatticeResult<()> {
     match field_def.kind {
+        schema::FieldKind::Text | schema::FieldKind::Date => {
+            let s = value.as_str().ok_or_else(|| {
+                Error::new(
+                    "invalid_field_value",
+                    format!("'{}' must be a string", field_def.name),
+                )
+            })?;
+            check_string_len(s, field_def.name)?;
+        }
+        schema::FieldKind::Number => {
+            value.as_f64().ok_or_else(|| {
+                Error::new(
+                    "invalid_field_value",
+                    format!("'{}' must be a number", field_def.name),
+                )
+            })?;
+        }
+        schema::FieldKind::Bool => {
+            value.as_bool().ok_or_else(|| {
+                Error::new(
+                    "invalid_field_value",
+                    format!("'{}' must be a boolean", field_def.name),
+                )
+            })?;
+        }
         schema::FieldKind::Enum(values) => {
             let s = value.as_str().ok_or_else(|| {
                 Error::new(
@@ -989,7 +1076,6 @@ fn validate_value(field_def: &schema::FieldDef, value: &serde_json::Value) -> La
                 }
             }
         }
-        _ => {}
     }
     Ok(())
 }

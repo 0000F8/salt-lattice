@@ -69,7 +69,18 @@ export async function openLattice({ workerUrl, wasmUrl, worker } = {}) {
     open: (args = {}) => send("open", { wasmUrl, ...args }),
     close: () => send("close"),
     hasRoot: () => send("hasRoot"),
-    createRoot: () => send("createRoot"),
+    /**
+     * Resolves to the raw 32 root bytes themselves (DESIGN.md §9), not a
+     * wrapper object — the worker's own reply is still `{raw}` internally
+     * (see lattice.worker.js's `doCreateRoot`); unwrapping here is what
+     * keeps every caller's `new Uint8Array(bytes)` (e.g. the vault backup
+     * wrap) from silently producing a zero-length array instead of a
+     * loud failure (review B4).
+     */
+    createRoot: async () => {
+      const { raw } = await send("createRoot");
+      return raw;
+    },
     /** `force: true` is only for a genuinely key-less device (see docs/DESIGN.md §6 / review #2) — refuses with `root_exists` otherwise. */
     restoreRoot: (raw, { force = false } = {}) => send("restoreRoot", { raw, force }),
     call: (op, args) => send("call", { op, args }),
@@ -100,6 +111,16 @@ export async function openLattice({ workerUrl, wasmUrl, worker } = {}) {
      * instead of being lost.
      */
     ackStandingUpdate: (grantId, seq) => send("ackStandingUpdate", { grantId, seq }),
+    /**
+     * Refresh the worker's view of every agent's CURRENT key fingerprint —
+     * `map` is `{[agent_id]: fingerprint}`, resolved by the app the same
+     * way it already does for on-demand requests, and re-sent after every
+     * grant sync. A grant whose agent isn't in the most recent map is
+     * skipped by the standing push entirely (security review B3/S10): a
+     * key rotation must stop automatic release until the app re-approves
+     * it, and the worker has no way to resolve a fingerprint on its own.
+     */
+    setAgentFingerprints: (map) => send("setAgentFingerprints", map),
     /** Not a worker op: tears down the underlying Worker (or fake) itself. */
     terminate: () => {
       if (typeof w.terminate === "function") w.terminate();

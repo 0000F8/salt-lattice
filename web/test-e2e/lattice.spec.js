@@ -34,7 +34,7 @@ test("root create + restore re-derives the same compartment keys", async ({ page
   expect(beforeCreate.hasRoot).toBe(false);
 
   const raw = await page.evaluate(async () => {
-    const { raw } = await window.__lattice.createRoot();
+    const raw = await window.__lattice.createRoot();
     return Array.from(raw);
   });
   expect(raw).toHaveLength(32);
@@ -162,6 +162,75 @@ test("write and read back across a real page reload", async ({ page }) => {
   expect(found.map((n) => n.id)).toContain(node.id);
 });
 
+test("open() drops a truncated trailing frame instead of failing the whole compartment", async ({ page }) => {
+  await page.evaluate(() => window.__lattice.createRoot());
+  await page.evaluate(() => window.__lattice.open({ compartments: ["preferences"] }));
+
+  // Two separate flushes -> two on-disk frames, so a corruption confined to
+  // the trailing one must leave the first fully intact (review S9).
+  await page.evaluate(() =>
+    window.__lattice.call("put_node", {
+      type: "preferences.food",
+      fields: { name: "Food" },
+      author: { kind: "you" },
+    }),
+  );
+  await page.evaluate(() =>
+    window.__lattice.call("put_node", {
+      type: "preferences.music",
+      fields: { name: "Music" },
+      author: { kind: "you" },
+    }),
+  );
+
+  await page.evaluate(() => window.__lattice.close());
+
+  const warnings = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "warning") warnings.push(msg.text());
+  });
+
+  // Truncate the compartment file's last few bytes via a throwaway worker:
+  // createSyncAccessHandle (the only OPFS write API that supports an
+  // in-place truncate+write) is worker-only in WebKit, and
+  // createWritable() isn't implemented in every engine either — a plain
+  // dedicated worker is the one thing all three support (the lattice
+  // worker itself isn't holding any handle open at this point; closed
+  // above).
+  await page.evaluate(async () => {
+    const workerCode = `
+      self.onmessage = async () => {
+        const root = await navigator.storage.getDirectory();
+        const dir = await (await root.getDirectoryHandle("lattice")).getDirectoryHandle("v1");
+        const handle = await dir.getFileHandle("preferences.frames");
+        const access = await handle.createSyncAccessHandle();
+        const size = access.getSize();
+        access.truncate(size - 5); // land inside the second frame's body
+        access.flush();
+        access.close();
+        self.postMessage({ ok: true });
+      };
+    `;
+    const worker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: "application/javascript" })));
+    await new Promise((resolve) => {
+      worker.onmessage = () => resolve();
+      worker.postMessage("go");
+    });
+    worker.terminate();
+  });
+
+  const opened = await page.evaluate(() => window.__lattice.open({ compartments: ["preferences"] }));
+  expect(opened.hasRoot).toBe(true);
+
+  const food = await page.evaluate(() => window.__lattice.call("query", { path: "preferences/food" }));
+  expect(food).toHaveLength(1); // the first, complete frame survived
+
+  const music = await page.evaluate(() => window.__lattice.call("query", { path: "preferences/music" }));
+  expect(music).toHaveLength(0); // the second, truncated frame was correctly dropped
+
+  expect(warnings.some((w) => w.includes("truncated trailing frame"))).toBe(true);
+});
+
 test("destroy compartment removes its data and stays destroyed after reopen", async ({ page }) => {
   await page.evaluate(() => window.__lattice.createRoot());
   await page.evaluate(() => window.__lattice.open({ compartments: ["health"] }));
@@ -218,6 +287,11 @@ test("backup export -> wipe OPFS -> import -> read back", async ({ page }) => {
   });
   expect(backup.length).toBeGreaterThan(0);
 
+  // Review B5: the manifest naming "preferences" and its size is encrypted,
+  // so the compartment name must not appear anywhere in the exported bytes.
+  const backupAsText = Buffer.from(backup).toString("latin1");
+  expect(backupAsText).not.toContain("preferences");
+
   await page.evaluate(() => window.__lattice.close());
 
   // Wipe OPFS entirely, simulating data loss. The async directory API
@@ -238,24 +312,33 @@ test("backup export -> wipe OPFS -> import -> read back", async ({ page }) => {
 });
 
 test("importBackup refuses an unsupported version and an unknown compartment name", async ({ page }) => {
-  await page.evaluate(() => window.__lattice.createRoot());
+  const raw = await page.evaluate(async () => Array.from(await window.__lattice.createRoot()));
   await page.evaluate(() => window.__lattice.open({ compartments: [] }));
 
-  const badVersion = await page.evaluate(async () => {
-    const { encodeBackup } = await import("/crypto.js");
-    const blob = encodeBackup({ version: 99, files: [] }, []);
+  // The manifest is encrypted (review B5): to build a validly-encrypted but
+  // semantically-wrong backup for this test, re-derive the SAME
+  // manifest key the worker uses, from the same raw root bytes — HKDF is
+  // deterministic, so this reconstructs the exact CryptoKey without the
+  // test ever reaching into the worker's private state.
+  const badVersion = await page.evaluate(async (rawBytes) => {
+    const { importRootKey, deriveBlobKey, encodeBackup } = await import("/crypto.js");
+    const rootKey = await importRootKey(crypto.subtle, Uint8Array.from(rawBytes));
+    const manifestKey = await deriveBlobKey(crypto.subtle, rootKey, "backup-manifest");
+    const blob = await encodeBackup(crypto.subtle, manifestKey, { version: 99, files: [] }, []);
     return window.__lattice.importBackup(blob).catch((e) => e);
-  });
+  }, raw);
   expect(badVersion.code).toBe("invalid_backup");
   expect(badVersion.message).toMatch(/version/);
 
-  const badCompartment = await page.evaluate(async () => {
-    const { encodeBackup } = await import("/crypto.js");
+  const badCompartment = await page.evaluate(async (rawBytes) => {
+    const { importRootKey, deriveBlobKey, encodeBackup } = await import("/crypto.js");
+    const rootKey = await importRootKey(crypto.subtle, Uint8Array.from(rawBytes));
+    const manifestKey = await deriveBlobKey(crypto.subtle, rootKey, "backup-manifest");
     const files = [{ name: "not_a_real_compartment", bytes: new Uint8Array([1, 2, 3]) }];
     const manifest = { version: 1, files: files.map((f) => ({ name: f.name, size: f.bytes.length })) };
-    const blob = encodeBackup(manifest, files);
+    const blob = await encodeBackup(crypto.subtle, manifestKey, manifest, files);
     return window.__lattice.importBackup(blob).catch((e) => e);
-  });
+  }, raw);
   expect(badCompartment.code).toBe("invalid_backup");
   expect(badCompartment.message).toMatch(/unknown compartment/);
 });
@@ -272,6 +355,12 @@ test("a standing grant pushes an onStandingUpdate after a matching write flushes
       standing: { expires_at: Date.now() + 90 * 24 * 60 * 60 * 1000 },
     }),
   );
+
+  // The app resolves and supplies the agent's CURRENT key fingerprint
+  // (security review B3/S10) — without this, pushStandingUpdates has
+  // nothing to pass standing_diff's now-required agent_fingerprint and
+  // skips the grant entirely; see the dedicated test below.
+  await page.evaluate(() => window.__lattice.setAgentFingerprints({ "agent-1": "fp-1" }));
 
   await page.evaluate(() => {
     window.__standingUpdates = [];
@@ -310,6 +399,78 @@ test("a standing grant pushes an onStandingUpdate after a matching write flushes
   expect(updates[0].facts.some((f) => f.field === "strength" && f.value === 0.8)).toBe(true);
 });
 
+test("a standing push is skipped when the agent's fingerprint is unknown or has rotated", async ({ page }) => {
+  await page.evaluate(() => window.__lattice.createRoot());
+  await page.evaluate(() => window.__lattice.open({ compartments: ["preferences"] }));
+
+  const grant = await page.evaluate(() =>
+    window.__lattice.call("set_grant", {
+      agent_id: "agent-1",
+      agent_fingerprint: "fp-1",
+      rules: [{ selector: "preferences.food.cuisine.strength", mode: "auto" }],
+      standing: { expires_at: Date.now() + 90 * 24 * 60 * 60 * 1000 },
+    }),
+  );
+
+  await page.evaluate(() => {
+    window.__standingUpdates = [];
+    window.__lattice.onStandingUpdate((update) => window.__standingUpdates.push(update));
+  });
+
+  const food = await page.evaluate(() =>
+    window.__lattice.call("put_node", {
+      type: "preferences.food",
+      fields: { name: "Food" },
+      author: { kind: "you" },
+    }),
+  );
+
+  // No setAgentFingerprints call yet: the worker has never been told
+  // agent-1's current key, so a fully matching write must push nothing.
+  await page.evaluate(
+    (foodId) =>
+      window.__lattice.call("put_node", {
+        type: "preferences.food.cuisine",
+        parent: foodId,
+        fields: { name: "Japanese", strength: 0.8 },
+        author: { kind: "you" },
+      }),
+    food.id,
+  );
+  expect(await page.evaluate(() => window.__standingUpdates)).toHaveLength(0);
+
+  // A rotated (wrong) fingerprint must also push nothing — the crate
+  // itself refuses standing_diff for a fingerprint mismatch (review B3).
+  await page.evaluate(() => window.__lattice.setAgentFingerprints({ "agent-1": "fp-ROTATED" }));
+  await page.evaluate(
+    (foodId) =>
+      window.__lattice.call("put_node", {
+        type: "preferences.food.cuisine",
+        parent: foodId,
+        fields: { name: "Thai", strength: 0.5 },
+        author: { kind: "you" },
+      }),
+    food.id,
+  );
+  expect(await page.evaluate(() => window.__standingUpdates)).toHaveLength(0);
+
+  // The correct current fingerprint unblocks the push.
+  await page.evaluate(() => window.__lattice.setAgentFingerprints({ "agent-1": "fp-1" }));
+  await page.evaluate(
+    (foodId) =>
+      window.__lattice.call("put_node", {
+        type: "preferences.food.cuisine",
+        parent: foodId,
+        fields: { name: "Korean", strength: 0.9 },
+        author: { kind: "you" },
+      }),
+    food.id,
+  );
+  await expect.poll(() => page.evaluate(() => window.__standingUpdates.length)).toBeGreaterThan(0);
+  const updates = await page.evaluate(() => window.__standingUpdates);
+  expect(updates[0].grantId).toBe(grant.id);
+});
+
 test("standing push is re-announced after a reload without an ack, and silent after an ack", async ({ page }) => {
   await page.evaluate(() => window.__lattice.createRoot());
   await page.evaluate(() => window.__lattice.open());
@@ -322,6 +483,11 @@ test("standing push is re-announced after a reload without an ack, and silent af
       standing: { expires_at: Date.now() + 90 * 24 * 60 * 60 * 1000 },
     }),
   );
+
+  // agentFingerprints is in-memory per worker session (never persisted —
+  // it's app-supplied, refreshed after grant sync), so every fresh session
+  // below (the initial one and after each reload) needs its own call.
+  await page.evaluate(() => window.__lattice.setAgentFingerprints({ "agent-1": "fp-1" }));
 
   await page.evaluate(() => {
     window.__standingUpdates = [];
@@ -358,6 +524,7 @@ test("standing push is re-announced after a reload without an ack, and silent af
   // building"): the same fact is "new" again on the next flush.
   await reloadAndReconnect(page);
   await page.evaluate(() => window.__lattice.open());
+  await page.evaluate(() => window.__lattice.setAgentFingerprints({ "agent-1": "fp-1" }));
   await page.evaluate(() => {
     window.__standingUpdates = [];
     window.__lattice.onStandingUpdate((update) => window.__standingUpdates.push(update));
@@ -386,6 +553,7 @@ test("standing push is re-announced after a reload without an ack, and silent af
 
   await reloadAndReconnect(page);
   await page.evaluate(() => window.__lattice.open());
+  await page.evaluate(() => window.__lattice.setAgentFingerprints({ "agent-1": "fp-1" }));
   await page.evaluate(() => {
     window.__standingUpdates = [];
     window.__lattice.onStandingUpdate((update) => window.__standingUpdates.push(update));

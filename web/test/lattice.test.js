@@ -29,6 +29,23 @@ describe("openLattice", () => {
     expect(result).toEqual({ echoed: "call", args: { op: "stats", args: {} } });
   });
 
+  // Review B4: the worker replies `{raw}`, but createRoot() must resolve to
+  // the bytes themselves (DESIGN.md §9) — a caller doing
+  // `new Uint8Array(bytes)` on a plain `{raw}` object silently produces a
+  // zero-length array instead of a loud failure, which is exactly the bug
+  // that shipped in salt-fe's backup wrap.
+  it("createRoot() resolves to the raw Uint8Array itself, not {raw}", async () => {
+    const rawBytes = Uint8Array.from({ length: 32 }, (_, i) => i);
+    const worker = makeFakeWorker((msg, w) => {
+      w.onmessage({ data: { id: msg.id, ok: true, result: { raw: rawBytes } } });
+    });
+    const handle = await openLattice({ wasmUrl: WASM_URL, worker });
+    const raw = await handle.createRoot();
+    expect(raw).toBeInstanceOf(Uint8Array);
+    expect(raw).toHaveLength(32);
+    expect(raw).toBe(rawBytes);
+  });
+
   it("rejects call() with the worker's structured error", async () => {
     const worker = makeFakeWorker((msg, w) => {
       w.onmessage({ data: { id: msg.id, ok: false, error: { code: "boom", message: "nope" } } });
@@ -74,7 +91,8 @@ describe("openLattice", () => {
     const seen = [];
     const worker = makeFakeWorker((msg, w) => {
       seen.push(msg);
-      w.onmessage({ data: { id: msg.id, ok: true, result: null } });
+      const result = msg.op === "createRoot" ? { raw: new Uint8Array(32) } : null;
+      w.onmessage({ data: { id: msg.id, ok: true, result } });
     });
     const handle = await openLattice({ wasmUrl: WASM_URL, worker });
 
@@ -89,6 +107,7 @@ describe("openLattice", () => {
     await handle.decryptBlob("embedding", new Uint8Array([1]));
     await handle.stats();
     await handle.ackStandingUpdate("g_1", 42);
+    await handle.setAgentFingerprints({ "agent-1": "fp-1" });
 
     expect(seen.map((m) => m.op)).toEqual([
       "close",
@@ -102,11 +121,13 @@ describe("openLattice", () => {
       "decryptBlob",
       "stats",
       "ackStandingUpdate",
+      "setAgentFingerprints",
     ]);
     expect(seen.find((m) => m.op === "restoreRoot").args).toEqual({ raw: new Uint8Array(32), force: false });
     expect(seen.find((m) => m.op === "destroyCompartment").args).toEqual({ compartment: "health" });
     expect(seen.find((m) => m.op === "encryptBlob").args).toEqual({ purpose: "embedding", bytes: new Uint8Array([1]) });
     expect(seen.find((m) => m.op === "ackStandingUpdate").args).toEqual({ grantId: "g_1", seq: 42 });
+    expect(seen.find((m) => m.op === "setAgentFingerprints").args).toEqual({ "agent-1": "fp-1" });
   });
 
   it("restoreRoot passes force:true through when asked", async () => {

@@ -13,7 +13,7 @@ import {
   deriveCompartmentKey,
   deriveBlobKey,
   encryptCompartmentFrame,
-  decryptCompartmentFrames,
+  decryptCompartmentFramesTolerant,
   encryptBlob as encryptBlobBytes,
   decryptBlob as decryptBlobBytes,
   encodeBackup,
@@ -32,6 +32,12 @@ let lattice = null; // the wasm `Lattice` instance, or null before/after open/cl
 let rootKey = null; // non-extractable HKDF CryptoKey, or null while locked
 let cachedSchema = null; // schemaJson() is static per build; cached once so importBackup can validate compartment names even after close()
 const loadedCompartments = new Set();
+// agent_id -> current key fingerprint, refreshed by the app after grant sync
+// (review B3/S10). Never the grant's own stored fingerprint — resolving the
+// agent's CURRENT key the same way handleLatticeRequest does for on-demand
+// requests is the whole point: it's what lets pushStandingUpdates notice a
+// rotated key and stop, instead of pushing to whoever holds the new key.
+let agentFingerprints = new Map();
 
 // --------------------------------------------------------------- plumbing
 
@@ -62,6 +68,22 @@ function requireRootKey() {
     throw { code: "locked", message: "no root key: call createRoot() or restoreRoot() first" };
   }
   return rootKey;
+}
+
+/**
+ * Like `requireRootKey`, but reloads from IndexedDB first if the in-memory
+ * `rootKey` was cleared by `close()` — mirroring what `doOpen`/`doHasRoot`
+ * already do. Needed for `doExportBackup`/`doImportBackup` (review B5 made
+ * both require the root key, to en/decrypt the manifest) and
+ * `doEncryptBlob`/`doDecryptBlob`, none of which otherwise require an open
+ * `lattice`, so the backup-restore flow's usual "close() then act" pattern
+ * must not force the caller to re-supply an already-known key.
+ */
+async function ensureRootKey() {
+  if (!rootKey) {
+    rootKey = await loadRootKeyFromIndexedDb();
+  }
+  return requireRootKey();
 }
 
 /**
@@ -168,14 +190,43 @@ async function readCompartmentFile(compartment) {
   }
 }
 
-/** Append one already-encrypted frame to `compartment`'s file. */
+/**
+ * Append one already-encrypted frame to `compartment`'s file. A short write
+ * (or one whose `flush()` throws) is truncated back to the exact pre-write
+ * size before the error propagates (review S9): otherwise a partial frame
+ * could land, and the next `open()` would read a length prefix promising
+ * bytes that were never fully written, making the whole compartment
+ * undecryptable rather than just this one write.
+ */
 async function appendToCompartmentFile(compartment, frameBytes) {
   const dir = await compartmentsDir();
   const handle = await dir.getFileHandle(fileNameFor(compartment), { create: true });
   const access = await handle.createSyncAccessHandle();
   try {
     const size = access.getSize();
-    access.write(frameBytes, { at: size });
+    try {
+      const written = access.write(frameBytes, { at: size });
+      if (written !== frameBytes.length) {
+        throw new Error(`short write: wrote ${written} of ${frameBytes.length} bytes`);
+      }
+      access.flush();
+    } catch (e) {
+      access.truncate(size);
+      access.flush();
+      throw e;
+    }
+  } finally {
+    access.close();
+  }
+}
+
+/** Truncate `compartment`'s file to exactly `size` bytes (review S9's `open()` recovery: drop a truncated trailing frame on disk, not just in memory). */
+async function truncateCompartmentFile(compartment, size) {
+  const dir = await compartmentsDir();
+  const handle = await dir.getFileHandle(fileNameFor(compartment), { create: true });
+  const access = await handle.createSyncAccessHandle();
+  try {
+    access.truncate(size);
     access.flush();
   } finally {
     access.close();
@@ -252,19 +303,29 @@ async function flushPending() {
 /**
  * DESIGN.md §7: "The worker calls [standing_diff] after every flush and the
  * app sends the push." This is the worker's half: for every non-revoked,
- * non-expired standing grant, ask the store what's changed and — if
- * anything did — tell the main thread via an unsolicited
+ * non-expired standing grant whose agent's CURRENT fingerprint is known (see
+ * `agentFingerprints` / `doSetAgentFingerprints`), ask the store what's
+ * changed and — if anything did — tell the main thread via an unsolicited
  * `{type: "standingUpdate"}` message (no request `id`; see
  * web/lattice.js's `onStandingUpdate`). Sending the push itself, and
  * confirming it landed, is the app's job (salt-fe, phase 2); this worker
  * never advances the checkpoint on its own — see `doAckStandingUpdate`.
  *
- * `standing_diff` is called with no `since_seq`: the crate now defaults it
- * from the grant's persisted `standing_checkpoint` (or the grant's creation
- * seq if none is recorded yet), so the watermark survives a reload without
- * this worker needing to track anything in memory. Before this, an
- * in-memory-only watermark reset to 0 on every reload and re-announced
- * every fact each time — the whole point of the checkpoint op below.
+ * `agent_fingerprint` is now a required argument to `standing_diff` — the
+ * crate refuses a rotated key the same way `evaluate`/`release` already do
+ * (security review B3: standing pushes previously had no key-rotation check
+ * at all). A grant this worker has no current fingerprint for is skipped
+ * entirely rather than guessed at; passing the grant's own stored
+ * fingerprint would defeat the check completely.
+ *
+ * `since_seq` is still omitted: the crate defaults it from the grant's
+ * persisted `standing_checkpoint` (or the grant's creation seq if none is
+ * recorded yet), so the watermark survives a reload without this worker
+ * needing to track anything in memory. The response's `max_seq` — not
+ * `stats().seq` — is what gets posted for the app to ack (security review
+ * S10: the store's global seq could include writes that landed in the
+ * network round trip before the ack, marking them "pushed" when they were
+ * never actually sent).
  *
  * Best-effort: never throws. A standing-push failure must not fail the
  * caller's own write, which already succeeded and is durable by the time
@@ -278,23 +339,23 @@ async function pushStandingUpdates() {
     const grants = grantsResult.ok;
     if (!grants || grants.length === 0) return;
 
-    // The store's current max seq: a valid checkpoint value for any grant
-    // that has a diff this round (core-crate's note — `Fact.updated` is a
-    // millisecond timestamp, not a seq, so it can't be used here).
-    const statsResult = JSON.parse(lattice.call("stats", "{}"));
-    const currentSeq = statsResult.ok ? statsResult.ok.seq : null;
     const nowMs = Date.now();
 
     for (const grant of grants) {
       if (grant.revoked || !grant.standing) continue;
       if (grant.standing.expires_at && grant.standing.expires_at < nowMs) continue;
 
-      const diffResult = JSON.parse(lattice.call("standing_diff", JSON.stringify({ grant_id: grant.id })));
-      if (diffResult.error) continue;
-      const facts = diffResult.ok;
-      if (!facts || facts.length === 0) continue;
+      const agentFingerprint = agentFingerprints.get(grant.agent_id);
+      if (!agentFingerprint) continue; // unknown: skip, never guess (review S10)
 
-      self.postMessage({ type: "standingUpdate", grantId: grant.id, facts, seq: currentSeq });
+      const diffResult = JSON.parse(
+        lattice.call("standing_diff", JSON.stringify({ grant_id: grant.id, agent_fingerprint: agentFingerprint })),
+      );
+      if (diffResult.error) continue;
+      const diff = diffResult.ok; // null, or {facts, max_seq}
+      if (!diff || !diff.facts || diff.facts.length === 0) continue;
+
+      self.postMessage({ type: "standingUpdate", grantId: grant.id, facts: diff.facts, seq: diff.max_seq });
     }
   } catch {
     // Best-effort — see doc comment above.
@@ -302,9 +363,28 @@ async function pushStandingUpdates() {
 }
 
 /**
+ * The app calls this after grant sync to keep the worker's view of "the
+ * agent's current key" fresh (review B3/S10) — `map` is `{[agent_id]:
+ * fingerprint}`, wholesale-replacing the previous map (not merged: a
+ * dropped entry means "no longer known", which correctly makes
+ * `pushStandingUpdates` skip that grant rather than keep using a stale
+ * fingerprint). Not a crate op — this is worker-local, in-memory state,
+ * never persisted or written to the store.
+ */
+function doSetAgentFingerprints(map = {}) {
+  agentFingerprints = new Map(Object.entries(map));
+  return { count: agentFingerprints.size };
+}
+
+/**
  * The app calls this ONLY after a standing push actually reached the
  * agent's key — never automatically from `pushStandingUpdates` — so a push
  * that failed to send is retried on the next flush instead of being lost.
+ * `seq` should be the `max_seq` the `standingUpdate` push carried (the
+ * highest seq actually represented in the facts that were sent), never a
+ * value computed independently — passing the store's current global seq
+ * instead let a write that landed during the network round trip to send
+ * get marked "pushed" without ever having been sent (security review S10).
  * Persists a `system`-compartment checkpoint record (flushed like anything
  * else), which is what `standing_diff` reads back to compute "since" on
  * every later call, including after a reload.
@@ -360,8 +440,30 @@ async function doOpen({ wasmUrl, compartments } = {}) {
       const fileBytes = await readCompartmentFile(compartment);
       if (fileBytes.length > 0) {
         const key = await deriveCompartmentKey(subtleCrypto(), rootKey, compartment);
-        const frames = await decryptCompartmentFrames(subtleCrypto(), key, compartment, fileBytes);
-        decoded.push({ compartment, frames });
+        const { plaintexts: frames, truncatedAt } = await decryptCompartmentFramesTolerant(
+          subtleCrypto(),
+          key,
+          compartment,
+          fileBytes,
+        );
+        // A trailing partial frame (review S9): drop it rather than failing
+        // the whole compartment, and fix the on-disk file to match so a
+        // later flush appends cleanly after the last COMPLETE frame instead
+        // of after the partial one.
+        if (truncatedAt !== null) {
+          console.warn(
+            `lattice: compartment "${compartment}" had a truncated trailing frame ` +
+              `(dropped ${fileBytes.length - truncatedAt} byte(s)); truncating on disk`,
+          );
+          try {
+            await truncateCompartmentFile(compartment, truncatedAt);
+          } catch (e) {
+            console.warn(`lattice: failed to truncate compartment "${compartment}" on disk`, e);
+          }
+        }
+        if (frames.length > 0) {
+          decoded.push({ compartment, frames });
+        }
       }
       loadedCompartments.add(compartment);
     }
@@ -489,6 +591,7 @@ async function doDestroyCompartment({ compartment } = {}) {
 
 async function doExportBackup() {
   const lat = requireLattice();
+  await ensureRootKey();
   const schema = JSON.parse(lat.schemaJson());
   const files = [];
   for (const compartment of schema.compartments) {
@@ -502,18 +605,25 @@ async function doExportBackup() {
     exportedAt: Date.now(),
     files: files.map((f) => ({ name: f.name, size: f.bytes.length })),
   };
-  return { blob: encodeBackup(manifest, files) };
+  // The manifest (compartment names and sizes) is encrypted under its own
+  // purpose-scoped blob key (review B5) — the server holding this backup
+  // row must not learn which compartments exist or how large each is.
+  const manifestKey = await deriveBlobKey(subtleCrypto(), rootKey, "backup-manifest");
+  return { blob: await encodeBackup(subtleCrypto(), manifestKey, manifest, files) };
 }
 
 async function doImportBackup({ blob } = {}) {
+  await ensureRootKey();
+  const manifestKey = await deriveBlobKey(subtleCrypto(), rootKey, "backup-manifest");
   // decodeBackup already validates byte-level structure (truncated/trailing
-  // data); this adds the semantic checks review #8 found missing:
-  // manifest version, and that every named file is a real compartment. Not
-  // a confidentiality issue either way (AEAD's AAD and the HKDF `info` are
-  // both bound to the true compartment name, so a mislabeled file just
-  // fails to decrypt later at open() rather than leaking anything) — this
-  // is about failing clearly and immediately instead of cryptically later.
-  const { manifest, files } = decodeBackup(toUint8Array(blob));
+  // data) and decrypts the manifest; this adds the semantic checks review
+  // #8 found missing: manifest version, and that every named file is a
+  // real compartment. Not a confidentiality issue either way (AEAD's AAD
+  // and the HKDF `info` are both bound to the true compartment name, so a
+  // mislabeled file just fails to decrypt later at open() rather than
+  // leaking anything) — this is about failing clearly and immediately
+  // instead of cryptically later.
+  const { manifest, files } = await decodeBackup(subtleCrypto(), manifestKey, toUint8Array(blob));
   if (manifest.version !== BACKUP_VERSION) {
     throw {
       code: "invalid_backup",
@@ -534,14 +644,14 @@ async function doImportBackup({ blob } = {}) {
 }
 
 async function doEncryptBlob({ purpose, bytes } = {}) {
-  requireRootKey();
+  await ensureRootKey();
   const key = await deriveBlobKey(subtleCrypto(), rootKey, purpose);
   const out = await encryptBlobBytes(subtleCrypto(), key, purpose, toUint8Array(bytes));
   return { bytes: out };
 }
 
 async function doDecryptBlob({ purpose, bytes } = {}) {
-  requireRootKey();
+  await ensureRootKey();
   const key = await deriveBlobKey(subtleCrypto(), rootKey, purpose);
   const out = await decryptBlobBytes(subtleCrypto(), key, purpose, toUint8Array(bytes));
   return { bytes: out };
@@ -577,6 +687,8 @@ async function handleOp(op, args) {
       return doDecryptBlob(args);
     case "ackStandingUpdate":
       return doAckStandingUpdate(args);
+    case "setAgentFingerprints":
+      return doSetAgentFingerprints(args);
     default:
       throw { code: "unknown_op", message: `no such worker op: ${op}` };
   }

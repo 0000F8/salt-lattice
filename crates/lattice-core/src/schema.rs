@@ -534,14 +534,23 @@ pub fn compartment_of(type_name: &str) -> Option<Compartment> {
 
 /// Closed field lookup: `name`/`note` are always valid (implicit on every
 /// type); anything else must be declared on `type_name`'s [`TypeDef`].
+/// Security review S5: this must refuse an unknown *type* even for the two
+/// implicit field names. Before this fix, `find_field("preferences.nonexistent",
+/// "name")` returned `Some(NAME_FIELD)` without ever checking that
+/// `preferences.nonexistent` is a real type, so `Selector::parse` accepted a
+/// typo'd `type.name`/`type.note` selector as valid — silently matching
+/// nothing, which let a narrowing `ask` rule on a typo'd type become a
+/// no-op while a broader `auto` rule kept releasing (the same failure shape
+/// as B2).
 pub fn find_field(type_name: &str, field_name: &str) -> Option<FieldDef> {
+    let type_def = find_type(type_name)?;
     if field_name == "name" {
         return Some(NAME_FIELD);
     }
     if field_name == "note" {
         return Some(NOTE_FIELD);
     }
-    find_type(type_name)?
+    type_def
         .fields
         .iter()
         .find(|f| f.name == field_name)

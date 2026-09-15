@@ -77,6 +77,36 @@ export function decodeFrames(bytes) {
   return frames;
 }
 
+/**
+ * Like `decodeFrames`, but tolerant of a truncated TRAILING frame (review
+ * S9): returns every complete frame plus `truncatedAt` (the byte offset
+ * right after the last complete frame) instead of throwing when the last
+ * one is partial. Frames are only ever appended, never inserted or edited
+ * in place, so under normal operation a truncation can only physically
+ * occur at the very end of the file (a write interrupted mid-flush); this
+ * is deliberately permissive on that assumption, for `open()`'s recovery
+ * path specifically. `decodeFrames` (strict) is still what every other
+ * caller should use.
+ */
+export function decodeFramesTolerant(bytes) {
+  const frames = [];
+  let offset = 0;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  while (offset < bytes.length) {
+    if (offset + 4 > bytes.length) {
+      return { frames, truncatedAt: offset };
+    }
+    const len = view.getUint32(offset, true);
+    const bodyStart = offset + 4;
+    if (bodyStart + len > bytes.length) {
+      return { frames, truncatedAt: offset };
+    }
+    frames.push(bytes.subarray(bodyStart, bodyStart + len));
+    offset = bodyStart + len;
+  }
+  return { frames, truncatedAt: null };
+}
+
 function randomNonce() {
   return globalThis.crypto.getRandomValues(new Uint8Array(12));
 }
@@ -137,6 +167,29 @@ export async function decryptCompartmentFrames(subtle, key, compartment, fileByt
   return plaintexts;
 }
 
+/**
+ * Like `decryptCompartmentFrames`, but built on `decodeFramesTolerant`
+ * (review S9): returns `{plaintexts, truncatedAt}` instead of throwing when
+ * the file ends in a partial frame, so `open()` can drop just that trailing
+ * frame (and truncate the on-disk file to match) instead of failing the
+ * whole compartment.
+ */
+export async function decryptCompartmentFramesTolerant(subtle, key, compartment, fileBytes) {
+  const { frames, truncatedAt } = decodeFramesTolerant(fileBytes);
+  const plaintexts = [];
+  for (const frame of frames) {
+    const nonce = frame.subarray(0, 12);
+    const ciphertext = frame.subarray(12);
+    const plaintext = await subtle.decrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: frameAad(compartment) },
+      key,
+      ciphertext,
+    );
+    plaintexts.push(new Uint8Array(plaintext));
+  }
+  return { plaintexts, truncatedAt };
+}
+
 /** Encrypt an opaque blob under a purpose-scoped key. Output is `nonce || ciphertext+tag` (no length prefix: callers hold one blob, not a concatenated file). */
 export async function encryptBlob(subtle, key, purpose, plaintext) {
   const nonce = randomNonce();
@@ -158,16 +211,66 @@ export async function decryptBlob(subtle, key, purpose, bytes) {
   return new Uint8Array(plaintext);
 }
 
+const BACKUP_PAD_BLOCK = 4096;
+
 /**
- * Backup packaging (`exportBackup`/`importBackup`, §9): a small JSON
- * manifest followed by each compartment file's bytes, each length-prefixed.
- * Every byte here is already ciphertext (a compartment file) — this module
- * never sees a root key or plaintext to build one.
+ * Pad `bytes` to a multiple of `blockSize` with a 4-byte LE true-length
+ * prefix embedded inside the padded block itself, so the exact original
+ * bytes come back from `unpadBlock` while the padded block's own length is
+ * always a round multiple of `blockSize` (review B5: without this, the
+ * backup blob's per-compartment section lengths reveal each compartment's
+ * exact byte size to the server; padding coarsens that to 4 KB buckets).
  */
-export function encodeBackup(manifest, files) {
-  const parts = [lengthPrefixed(encoder.encode(JSON.stringify(manifest)))];
+function padBlock(bytes, blockSize = BACKUP_PAD_BLOCK) {
+  const withLen = concatBytes([uint32LE(bytes.length), bytes]);
+  const total = Math.ceil(withLen.length / blockSize) * blockSize;
+  const padded = new Uint8Array(total); // zero-filled tail
+  padded.set(withLen, 0);
+  return padded;
+}
+
+function uint32LE(n) {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, n, true);
+  return out;
+}
+
+/** Reverses `padBlock`: reads the embedded true length and returns exactly the original bytes, ignoring the zero-fill tail. */
+function unpadBlock(padded) {
+  if (padded.length < 4) {
+    throw new Error("lattice: padded backup block is too short to contain a length prefix");
+  }
+  const view = new DataView(padded.buffer, padded.byteOffset, padded.byteLength);
+  const len = view.getUint32(0, true);
+  if (4 + len > padded.length) {
+    throw new Error("lattice: padded backup block's embedded length exceeds the block itself");
+  }
+  return padded.subarray(4, 4 + len);
+}
+
+/**
+ * Backup packaging (`exportBackup`/`importBackup`, §9). The manifest (which
+ * names every compartment and its size) is itself encrypted as a blob under
+ * `manifestKey` (`deriveBlobKey(root, "backup-manifest")` — review B5: the
+ * server holding the backup row must not learn which compartments exist or
+ * how large each is, and a plaintext manifest at offset zero told it both).
+ * Each compartment's ciphertext is padded to a 4 KB block before being
+ * length-prefixed, so the wire-visible section lengths only ever reveal a
+ * coarse (4 KB-bucketed) size, never the exact one. Every compartment byte
+ * here is already ciphertext from its own AES-256-GCM frame — this only
+ * adds a second, independent encryption layer around the *inventory*
+ * (names/sizes), not the facts themselves.
+ */
+export async function encodeBackup(subtle, manifestKey, manifest, files) {
+  const encryptedManifest = await encryptBlob(
+    subtle,
+    manifestKey,
+    "backup-manifest",
+    encoder.encode(JSON.stringify(manifest)),
+  );
+  const parts = [lengthPrefixed(encryptedManifest)];
   for (const file of files) {
-    parts.push(lengthPrefixed(file.bytes));
+    parts.push(lengthPrefixed(padBlock(file.bytes)));
   }
   return concatBytes(parts);
 }
@@ -181,7 +284,7 @@ export function encodeBackup(manifest, files) {
  * file has been read. A short manifest that undercounts its own files used
  * to silently drop the trailing ones instead of failing import outright.
  */
-export function decodeBackup(bytes) {
+export async function decodeBackup(subtle, manifestKey, bytes) {
   if (bytes.length < 4) {
     throw new Error("lattice: backup is too short to contain a manifest");
   }
@@ -193,14 +296,15 @@ export function decodeBackup(bytes) {
   if (offset + manifestLen > bytes.length) {
     throw new Error("lattice: truncated backup manifest");
   }
-  const manifestBytes = bytes.subarray(offset, offset + manifestLen);
+  const encryptedManifest = bytes.subarray(offset, offset + manifestLen);
   offset += manifestLen;
 
   let manifest;
   try {
-    manifest = JSON.parse(decoder.decode(manifestBytes));
+    const manifestPlaintext = await decryptBlob(subtle, manifestKey, "backup-manifest", encryptedManifest);
+    manifest = JSON.parse(decoder.decode(manifestPlaintext));
   } catch (e) {
-    throw new Error(`lattice: backup manifest is not valid JSON: ${e.message}`);
+    throw new Error(`lattice: backup manifest failed to decrypt or parse: ${e.message}`);
   }
   if (typeof manifest !== "object" || manifest === null || !Array.isArray(manifest.files)) {
     throw new Error("lattice: backup manifest has no files array");
@@ -219,9 +323,9 @@ export function decodeBackup(bytes) {
     if (offset + len > bytes.length) {
       throw new Error(`lattice: backup's file block for "${entry.name}" is truncated`);
     }
-    const fileBytes = bytes.subarray(offset, offset + len);
+    const paddedBytes = bytes.subarray(offset, offset + len);
     offset += len;
-    files.push({ name: entry.name, bytes: fileBytes });
+    files.push({ name: entry.name, bytes: unpadBlock(paddedBytes) });
   }
 
   if (offset !== bytes.length) {
