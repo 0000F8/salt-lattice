@@ -88,6 +88,7 @@ describe("openLattice", () => {
     await handle.encryptBlob("embedding", new Uint8Array([1]));
     await handle.decryptBlob("embedding", new Uint8Array([1]));
     await handle.stats();
+    await handle.ackStandingUpdate("g_1", 42);
 
     expect(seen.map((m) => m.op)).toEqual([
       "close",
@@ -100,10 +101,12 @@ describe("openLattice", () => {
       "encryptBlob",
       "decryptBlob",
       "stats",
+      "ackStandingUpdate",
     ]);
     expect(seen.find((m) => m.op === "restoreRoot").args).toEqual({ raw: new Uint8Array(32), force: false });
     expect(seen.find((m) => m.op === "destroyCompartment").args).toEqual({ compartment: "health" });
     expect(seen.find((m) => m.op === "encryptBlob").args).toEqual({ purpose: "embedding", bytes: new Uint8Array([1]) });
+    expect(seen.find((m) => m.op === "ackStandingUpdate").args).toEqual({ grantId: "g_1", seq: 42 });
   });
 
   it("restoreRoot passes force:true through when asked", async () => {
@@ -145,18 +148,18 @@ describe("openLattice", () => {
     const received = [];
     const unsubscribe = handle.onStandingUpdate((update) => received.push(update));
 
-    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_1", facts: [{ path: "a" }] } });
-    expect(received).toEqual([{ grantId: "g_1", facts: [{ path: "a" }] }]);
+    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_1", facts: [{ path: "a" }], seq: 12 } });
+    expect(received).toEqual([{ grantId: "g_1", facts: [{ path: "a" }], seq: 12 }]);
 
     unsubscribe();
-    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_2", facts: [] } });
+    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_2", facts: [], seq: 13 } });
     expect(received).toHaveLength(1); // unsubscribed listener heard nothing further
 
     // No stray request/response handling: a standingUpdate never touches
     // in-flight requests (no `id`, so it must not resolve/reject anything).
     const pending = handle.stats();
     capturedOnMessage({ data: { id: 999, ok: true, result: "wrong-id-ignored" } });
-    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_3", facts: [{ path: "b" }] } });
+    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_3", facts: [{ path: "b" }], seq: 14 } });
     expect(worker.postMessage).toHaveBeenCalled();
     const lastCall = worker.postMessage.mock.calls.at(-1)[0];
     capturedOnMessage({ data: { id: lastCall.id, ok: true, result: "stats-result" } });

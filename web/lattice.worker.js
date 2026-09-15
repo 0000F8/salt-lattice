@@ -32,7 +32,6 @@ let lattice = null; // the wasm `Lattice` instance, or null before/after open/cl
 let rootKey = null; // non-extractable HKDF CryptoKey, or null while locked
 let cachedSchema = null; // schemaJson() is static per build; cached once so importBackup can validate compartment names even after close()
 const loadedCompartments = new Set();
-const lastPushedSeq = new Map(); // grantId -> highest seq already pushed via a standing update, this worker session only
 
 // --------------------------------------------------------------- plumbing
 
@@ -253,19 +252,19 @@ async function flushPending() {
 /**
  * DESIGN.md §7: "The worker calls [standing_diff] after every flush and the
  * app sends the push." This is the worker's half: for every non-revoked,
- * non-expired standing grant, ask the store what changed since the last
- * push and — if anything did — advance the watermark and tell the main
- * thread via an unsolicited `{type: "standingUpdate"}` message (no request
- * `id`; see web/lattice.js's `onStandingUpdate`). Sending the push itself is
- * the app's job (salt-fe, phase 2) and is out of scope here.
+ * non-expired standing grant, ask the store what's changed and — if
+ * anything did — tell the main thread via an unsolicited
+ * `{type: "standingUpdate"}` message (no request `id`; see
+ * web/lattice.js's `onStandingUpdate`). Sending the push itself, and
+ * confirming it landed, is the app's job (salt-fe, phase 2); this worker
+ * never advances the checkpoint on its own — see `doAckStandingUpdate`.
  *
- * The watermark (`lastPushedSeq`) is in-memory only, for this worker
- * session: there is no persisted "last pushed seq" record in phase 1, so a
- * fresh session (page reload) starts every grant back at seq 0 and may
- * re-announce facts it already pushed before the reload. That's a known
- * phase-1 gap, not silently swallowed — flagged here rather than solved,
- * since fixing it means a new persisted record type, which is
- * crates/lattice-core's call, not this worker's.
+ * `standing_diff` is called with no `since_seq`: the crate now defaults it
+ * from the grant's persisted `standing_checkpoint` (or the grant's creation
+ * seq if none is recorded yet), so the watermark survives a reload without
+ * this worker needing to track anything in memory. Before this, an
+ * in-memory-only watermark reset to 0 on every reload and re-announced
+ * every fact each time — the whole point of the checkpoint op below.
  *
  * Best-effort: never throws. A standing-push failure must not fail the
  * caller's own write, which already succeeded and is durable by the time
@@ -279,6 +278,9 @@ async function pushStandingUpdates() {
     const grants = grantsResult.ok;
     if (!grants || grants.length === 0) return;
 
+    // The store's current max seq: a valid checkpoint value for any grant
+    // that has a diff this round (core-crate's note — `Fact.updated` is a
+    // millisecond timestamp, not a seq, so it can't be used here).
     const statsResult = JSON.parse(lattice.call("stats", "{}"));
     const currentSeq = statsResult.ok ? statsResult.ok.seq : null;
     const nowMs = Date.now();
@@ -287,22 +289,32 @@ async function pushStandingUpdates() {
       if (grant.revoked || !grant.standing) continue;
       if (grant.standing.expires_at && grant.standing.expires_at < nowMs) continue;
 
-      const sinceSeq = lastPushedSeq.get(grant.id) ?? 0;
-      const diffResult = JSON.parse(
-        lattice.call("standing_diff", JSON.stringify({ grant_id: grant.id, since_seq: sinceSeq })),
-      );
+      const diffResult = JSON.parse(lattice.call("standing_diff", JSON.stringify({ grant_id: grant.id })));
       if (diffResult.error) continue;
       const facts = diffResult.ok;
       if (!facts || facts.length === 0) continue;
 
-      if (currentSeq !== null) {
-        lastPushedSeq.set(grant.id, currentSeq);
-      }
-      self.postMessage({ type: "standingUpdate", grantId: grant.id, facts });
+      self.postMessage({ type: "standingUpdate", grantId: grant.id, facts, seq: currentSeq });
     }
   } catch {
     // Best-effort — see doc comment above.
   }
+}
+
+/**
+ * The app calls this ONLY after a standing push actually reached the
+ * agent's key — never automatically from `pushStandingUpdates` — so a push
+ * that failed to send is retried on the next flush instead of being lost.
+ * Persists a `system`-compartment checkpoint record (flushed like anything
+ * else), which is what `standing_diff` reads back to compute "since" on
+ * every later call, including after a reload.
+ */
+async function doAckStandingUpdate({ grantId, seq } = {}) {
+  const lat = requireLattice();
+  const resultJson = lat.call("standing_checkpoint", JSON.stringify({ grant_id: grantId, seq }));
+  const result = unwrapCallResult(resultJson);
+  await flushPending();
+  return result;
 }
 
 // -------------------------------------------------------------------- ops
@@ -563,6 +575,8 @@ async function handleOp(op, args) {
       return doEncryptBlob(args);
     case "decryptBlob":
       return doDecryptBlob(args);
+    case "ackStandingUpdate":
+      return doAckStandingUpdate(args);
     default:
       throw { code: "unknown_op", message: `no such worker op: ${op}` };
   }

@@ -7,9 +7,7 @@
 // typed arrays), converted back with Uint8Array.from on the receiving side.
 import { test, expect, resetLatticeStorage } from "./fixtures.js";
 
-test.beforeEach(async ({ page }) => {
-  await page.goto("/index.html");
-  await resetLatticeStorage(page);
+async function openWorkerHandle(page) {
   await page.evaluate(async () => {
     const { openLattice } = await import("/lattice.js");
     window.__lattice = await openLattice({
@@ -17,6 +15,18 @@ test.beforeEach(async ({ page }) => {
       wasmUrl: "/pkg/lattice_wasm_bg.wasm",
     });
   });
+}
+
+/** A real page reload followed by re-creating the worker handle: OPFS/IndexedDB survive, the previous `window.__lattice` and its worker do not. */
+async function reloadAndReconnect(page) {
+  await page.reload();
+  await openWorkerHandle(page);
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/index.html");
+  await resetLatticeStorage(page);
+  await openWorkerHandle(page);
 });
 
 test("root create + restore re-derives the same compartment keys", async ({ page }) => {
@@ -298,6 +308,103 @@ test("a standing grant pushes an onStandingUpdate after a matching write flushes
   expect(updates).toHaveLength(1); // the non-matching write pushed nothing
   expect(updates[0].grantId).toBe(grant.id);
   expect(updates[0].facts.some((f) => f.field === "strength" && f.value === 0.8)).toBe(true);
+});
+
+test("standing push is re-announced after a reload without an ack, and silent after an ack", async ({ page }) => {
+  await page.evaluate(() => window.__lattice.createRoot());
+  await page.evaluate(() => window.__lattice.open());
+
+  const grant = await page.evaluate(() =>
+    window.__lattice.call("set_grant", {
+      agent_id: "agent-1",
+      agent_fingerprint: "fp-1",
+      rules: [{ selector: "preferences.food.cuisine.strength", mode: "auto" }],
+      standing: { expires_at: Date.now() + 90 * 24 * 60 * 60 * 1000 },
+    }),
+  );
+
+  await page.evaluate(() => {
+    window.__standingUpdates = [];
+    window.__lattice.onStandingUpdate((update) => window.__standingUpdates.push(update));
+  });
+
+  const food = await page.evaluate(() =>
+    window.__lattice.call("put_node", {
+      type: "preferences.food",
+      fields: { name: "Food" },
+      author: { kind: "you" },
+    }),
+  );
+  await page.evaluate(
+    (foodId) =>
+      window.__lattice.call("put_node", {
+        type: "preferences.food.cuisine",
+        parent: foodId,
+        fields: { name: "Japanese", strength: 0.8 },
+        author: { kind: "you" },
+      }),
+    food.id,
+  );
+
+  await expect.poll(() => page.evaluate(() => window.__standingUpdates.length)).toBe(1);
+  const firstPush = await page.evaluate(() => window.__standingUpdates[0]);
+  expect(firstPush.grantId).toBe(grant.id);
+  expect(typeof firstPush.seq).toBe("number");
+  expect(firstPush.facts.some((f) => f.field === "strength" && f.value === 0.8)).toBe(true);
+
+  // --- Reload WITHOUT acking -------------------------------------------
+  // No checkpoint was ever recorded for this grant, so standing_diff
+  // defaults to the grant's creation seq (docs/DESIGN.md "Decided while
+  // building"): the same fact is "new" again on the next flush.
+  await reloadAndReconnect(page);
+  await page.evaluate(() => window.__lattice.open());
+  await page.evaluate(() => {
+    window.__standingUpdates = [];
+    window.__lattice.onStandingUpdate((update) => window.__standingUpdates.push(update));
+  });
+
+  // A write that doesn't match the grant's selector, purely to trigger a
+  // flush (and therefore a pushStandingUpdates pass) after the reload.
+  await page.evaluate(() =>
+    window.__lattice.call("put_node", {
+      type: "health.condition",
+      fields: { name: "Unrelated" },
+      author: { kind: "you" },
+    }),
+  );
+
+  await expect.poll(() => page.evaluate(() => window.__standingUpdates.length)).toBe(1);
+  const reannounced = await page.evaluate(() => window.__standingUpdates[0]);
+  expect(reannounced.grantId).toBe(grant.id);
+  expect(reannounced.facts.some((f) => f.field === "strength" && f.value === 0.8)).toBe(true);
+
+  // --- Ack it, then reload again ----------------------------------------
+  await page.evaluate(
+    ({ grantId, seq }) => window.__lattice.ackStandingUpdate(grantId, seq),
+    { grantId: reannounced.grantId, seq: reannounced.seq },
+  );
+
+  await reloadAndReconnect(page);
+  await page.evaluate(() => window.__lattice.open());
+  await page.evaluate(() => {
+    window.__standingUpdates = [];
+    window.__lattice.onStandingUpdate((update) => window.__standingUpdates.push(update));
+  });
+
+  await page.evaluate(() =>
+    window.__lattice.call("put_node", {
+      type: "health.condition",
+      fields: { name: "Another unrelated write" },
+      author: { kind: "you" },
+    }),
+  );
+
+  // pushStandingUpdates runs synchronously inside the same awaited flush as
+  // the write above, so by the time that call resolves any push it was
+  // going to send has already happened — no arbitrary wait needed to prove
+  // silence, only to prove a message arrived (the `expect.poll`s above).
+  const afterAck = await page.evaluate(() => window.__standingUpdates);
+  expect(afterAck).toHaveLength(0);
 });
 
 test("encryptBlob/decryptBlob round-trips through a real worker", async ({ page }) => {

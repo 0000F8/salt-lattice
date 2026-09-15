@@ -31,6 +31,25 @@ pub enum RecordBody {
     RevokeGrant { grant_id: String, revoked_at: u64 },
     Disclosure(DisclosureEntry),
     DestroyCompartment { compartment: String, at: u64 },
+    StandingCheckpoint(StandingCheckpoint),
+}
+
+/// A `list_grants` row: the grant plus its current standing-push watermark.
+/// `last_pushed_seq` isn't part of the persisted `Grant` record (it changes
+/// independently, via a separate `StandingCheckpoint` record) — this is a
+/// read view assembled at query time, not something written to disk itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct GrantSummary {
+    #[serde(flatten)]
+    pub grant: Grant,
+    pub last_pushed_seq: Option<u64>,
+}
+
+impl std::ops::Deref for GrantSummary {
+    type Target = Grant;
+    fn deref(&self) -> &Grant {
+        &self.grant
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +90,12 @@ pub struct Store {
 
     grants: BTreeMap<String, Grant>,
     current_grant_by_agent: BTreeMap<String, String>,
+    /// The seq each grant record was created at — the default `standing_diff`
+    /// baseline for a grant that has never been checkpointed.
+    grant_created_seq: BTreeMap<String, u64>,
+    /// The latest `StandingCheckpoint` per grant id (last-write-wins; no
+    /// history is kept, only the current watermark).
+    standing_checkpoints: BTreeMap<String, StandingCheckpoint>,
 
     disclosures: Vec<DisclosureEntry>,
 }
@@ -93,6 +118,8 @@ impl Store {
             link_versions: BTreeMap::new(),
             grants: BTreeMap::new(),
             current_grant_by_agent: BTreeMap::new(),
+            grant_created_seq: BTreeMap::new(),
+            standing_checkpoints: BTreeMap::new(),
             disclosures: Vec::new(),
         }
     }
@@ -246,6 +273,7 @@ impl Store {
                 let agent_id = grant.agent_id.clone();
                 let id = grant.id.clone();
                 let is_active = grant.revoked.is_none();
+                self.grant_created_seq.insert(id.clone(), record.seq);
                 self.grants.insert(id.clone(), grant);
                 if is_active {
                     self.current_grant_by_agent.insert(agent_id, id);
@@ -268,6 +296,10 @@ impl Store {
             }
             RecordBody::DestroyCompartment { compartment, .. } => {
                 self.purge_compartment(&compartment);
+            }
+            RecordBody::StandingCheckpoint(checkpoint) => {
+                self.standing_checkpoints
+                    .insert(checkpoint.grant_id.clone(), checkpoint);
             }
         }
     }
@@ -604,17 +636,58 @@ impl Store {
             .find(|g| g.agent_fingerprint == fingerprint)
     }
 
-    pub fn list_grants(&self) -> Vec<Grant> {
+    pub fn list_grants(&self) -> Vec<GrantSummary> {
         self.current_grant_by_agent
             .values()
             .filter_map(|id| self.grants.get(id))
             .filter(|g| g.revoked.is_none())
-            .cloned()
+            .map(|g| GrantSummary {
+                grant: g.clone(),
+                last_pushed_seq: self.last_pushed_seq(&g.id),
+            })
             .collect()
     }
 
     pub fn all_grants_including_revoked(&self) -> Vec<Grant> {
         self.grants.values().cloned().collect()
+    }
+
+    /// The current standing-push watermark for a grant, if one has ever been
+    /// recorded (`docs/DESIGN.md` "Decided while building").
+    pub fn last_pushed_seq(&self, grant_id: &str) -> Option<u64> {
+        self.standing_checkpoints.get(grant_id).map(|c| c.seq)
+    }
+
+    /// `standing_diff`'s default baseline when the caller omits `since_seq`:
+    /// the grant's last checkpoint, or its own creation seq if it has never
+    /// been checkpointed.
+    pub fn default_since_seq(&self, grant_id: &str) -> u64 {
+        self.last_pushed_seq(grant_id)
+            .or_else(|| self.grant_created_seq.get(grant_id).copied())
+            .unwrap_or(0)
+    }
+
+    /// Persist a standing-push watermark for `grant_id` (a `system`-compartment
+    /// record). Call after successfully pushing a standing diff, with the
+    /// highest seq among the facts just pushed.
+    pub fn set_standing_checkpoint(&mut self, grant_id: &str, seq: u64) -> LatticeResult<()> {
+        if self.find_grant(grant_id).is_none() {
+            return Err(Error::new(
+                "not_found",
+                format!("no grant with id {grant_id}"),
+            ));
+        }
+        let ts = self.now();
+        let checkpoint = StandingCheckpoint {
+            grant_id: grant_id.to_string(),
+            seq,
+            ts,
+        };
+        self.commit(
+            "system".to_string(),
+            RecordBody::StandingCheckpoint(checkpoint),
+        );
+        Ok(())
     }
 
     /// Create (or, for the same `agent_id`, supersede) a grant. R8: a

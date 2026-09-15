@@ -115,6 +115,18 @@ pub struct Grant {
     pub revoked: Option<u64>,
 }
 
+/// A persisted watermark for one grant's standing push (`docs/DESIGN.md`
+/// "Decided while building"): where the *next* `standing_diff` for this
+/// grant should start from. Lives in the `system` compartment, like grants
+/// themselves. The latest one wins — there is no history of checkpoints,
+/// only the current watermark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StandingCheckpoint {
+    pub grant_id: String,
+    pub seq: u64,
+    pub ts: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Channel {

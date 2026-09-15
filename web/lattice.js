@@ -33,7 +33,9 @@ export async function openLattice({ workerUrl, wasmUrl, worker } = {}) {
     // aren't a reply to anything this client sent, so they're routed to
     // onStandingUpdate listeners instead of the request/response map.
     if (data && data.type === "standingUpdate") {
-      for (const listener of standingListeners) listener({ grantId: data.grantId, facts: data.facts });
+      for (const listener of standingListeners) {
+        listener({ grantId: data.grantId, facts: data.facts, seq: data.seq });
+      }
       return;
     }
     const { id, ok, result, error } = data;
@@ -81,14 +83,23 @@ export async function openLattice({ workerUrl, wasmUrl, worker } = {}) {
      * Subscribe to standing-grant pushes (docs/DESIGN.md §7): the worker
      * calls `standing_diff` after every flush and, when a standing grant's
      * `auto` fields changed, calls every registered listener with
-     * `{grantId, facts}` instead of replying to a request. Not a worker op
-     * itself — sending the actual push to the agent is the app's job.
-     * Returns an unsubscribe function.
+     * `{grantId, facts, seq}` instead of replying to a request. Not a
+     * worker op itself — sending the actual push to the agent is the app's
+     * job. Returns an unsubscribe function.
      */
     onStandingUpdate: (listener) => {
       standingListeners.add(listener);
       return () => standingListeners.delete(listener);
     },
+    /**
+     * Call ONLY after a standing push from `onStandingUpdate` actually
+     * reached the agent's key — pass the same `grantId` and `seq` the
+     * update carried. This persists the checkpoint `standing_diff` reads
+     * back to compute "since" on every later call, including after a
+     * reload; a push that never gets acked is retried on the next flush
+     * instead of being lost.
+     */
+    ackStandingUpdate: (grantId, seq) => send("ackStandingUpdate", { grantId, seq }),
     /** Not a worker op: tears down the underlying Worker (or fake) itself. */
     terminate: () => {
       if (typeof w.terminate === "function") w.terminate();

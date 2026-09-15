@@ -301,3 +301,43 @@ rebuilt via `scripts/build-wasm.sh` (164.6 KB gzip, still well under the 300 KB 
   *approval* half — which `ask` items the person actually consented to — still has to come from the caller,
   since that's a one-time interactive choice nothing in the crate can re-derive; only the *authorization*
   half (is this still something the current grant state allows right now) is re-checked.
+
+## Decided while building, round 3 (persisted standing checkpoint, 2026-09-15)
+
+Follow-up from the team lead: the worker's standing-push watermark ("what seq have we already pushed for this
+grant") lived only in worker memory, so a reload re-announced facts already sent. Fixed by moving the
+watermark into the store as a `system`-compartment record, the same way grants and the disclosure log are.
+`cargo test -p lattice-core` is green (33 tests: the prior 31 plus 2 new — a reload round trip proving the
+checkpoint survives, and a check that an uncheckpointed grant defaults to its own creation seq rather than 0),
+`cargo fmt` and `cargo clippy --workspace --all-targets -- -D warnings` are both clean. No wasm-bindgen
+*surface* change was needed — both pieces below go through the existing generic `call(op, args)` passthrough,
+so `crates/lattice-wasm/src/lib.rs` itself is untouched. `pkg/` still needed a rebuild, though (an earlier
+note in this same round claimed otherwise and was wrong): the compiled `.wasm` statically embeds
+`lattice-core`'s logic, so the new `standing_checkpoint` match arm, the checkpoint lookup inside
+`standing_diff`, and `last_pushed_seq` on `list_grants` only exist in `pkg/` after rebuilding from the
+updated source — an unchanged JS-facing signature doesn't mean an unchanged binary. Rebuilt via
+`scripts/build-wasm.sh` (167.8 KB gzip, still under the 300 KB gate). The op name and shape were written to
+the session's coordination file for the worker-side agent before implementing, per the standing setup for
+cross-agent contract changes on this branch.
+
+- **New `system` record, `StandingCheckpoint { grant_id, seq, ts }`**, and a new op,
+  `standing_checkpoint {grant_id, seq}`, that commits one. Last-write-wins per `grant_id` — there is no
+  history of checkpoints, only the current watermark (`Store::standing_checkpoints`, `Store::last_pushed_seq`).
+  A caller (the worker) calls this once a standing push has actually succeeded, with the highest seq among
+  the facts it just pushed.
+- **`standing_diff`'s `since_seq` is now `Option<u64>`.** `None` (the new preferred form; the `api::call`
+  arg can be omitted or `null`) defers to `Store::default_since_seq(grant_id)`: the grant's last checkpoint,
+  or — for a grant that has never been checkpointed — the seq the grant itself was created at (`Store`
+  gained `grant_created_seq`, populated the same way `node_seq` already was, whenever a `Grant` record is
+  applied). Defaulting to the grant's *creation* seq rather than `0` matters: without it, a brand-new grant's
+  first standing diff would include any pre-existing `auto`-visible data written before the grant ever
+  existed, not just data going forward. Passing an explicit `since_seq` still works unchanged (still exactly
+  the old behavior) — nothing about existing callers breaks, this only adds a default for callers that omit it.
+  The practical effect for the worker: it no longer needs to track the watermark in memory *at all* — call
+  `standing_diff` with no `since_seq` every time, `standing_checkpoint` once the push succeeds.
+- **`list_grants` rows gain `last_pushed_seq: Option<u64>`.** Not part of the persisted `Grant` record itself
+  (it changes independently of a grant's rules, via its own `StandingCheckpoint` record) — assembled at read
+  time into a new `GrantSummary` view type (`Grant` plus `last_pushed_seq`, `Deref`s to `Grant` so existing
+  call sites reading `grant.id`/`grant.agent_id`/etc. off a `list_grants()` result needed no changes).
+  Read-only / informational; `standing_diff`'s own default doesn't go through this field, it reads the same
+  underlying checkpoint index directly.

@@ -281,11 +281,22 @@ pub fn release(
     Ok((payload, entry))
 }
 
-/// `standing_diff(grant_id, since_seq) -> Option<[Fact]>` (§7). `None` when
+/// `standing_diff(grant_id, since_seq?) -> Option<[Fact]>` (§7). `None` when
 /// the grant is revoked, has no standing, or its standing has expired (R13);
 /// otherwise every accepted field under an `auto` selector whose node was
 /// written after `since_seq`.
-pub fn standing_diff(store: &Store, grant_id: &str, since_seq: u64, now: u64) -> Option<Vec<Fact>> {
+///
+/// `since_seq: None` (decided while building, persisted checkpoint) defaults
+/// to [`Store::default_since_seq`] — the grant's last `standing_checkpoint`,
+/// or its own creation seq if it has never been checkpointed — so a caller
+/// no longer has to track the watermark itself between calls, and that
+/// watermark survives a reload since it's a `system`-compartment record.
+pub fn standing_diff(
+    store: &Store,
+    grant_id: &str,
+    since_seq: Option<u64>,
+    now: u64,
+) -> Option<Vec<Fact>> {
     let grant = store.find_grant(grant_id)?;
     if grant.revoked.is_some() {
         return None;
@@ -294,6 +305,7 @@ pub fn standing_diff(store: &Store, grant_id: &str, since_seq: u64, now: u64) ->
     if standing.expires_at < now {
         return None;
     }
+    let since_seq = since_seq.unwrap_or_else(|| store.default_since_seq(grant_id));
 
     let auto_selectors: Vec<Selector> = grant
         .rules

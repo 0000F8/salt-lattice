@@ -610,7 +610,7 @@ fn r11_destroyed_compartment_writes_refused_and_never_disclosed() {
         evaluation.auto
     );
 
-    let diff = access::standing_diff(&store, &grant_id, 0, store.now());
+    let diff = access::standing_diff(&store, &grant_id, None, store.now());
     assert!(
         diff.map(|facts| facts.is_empty()).unwrap_or(true),
         "destroyed-compartment nodes must never appear in a standing diff either"
@@ -746,7 +746,7 @@ fn r13_expired_standing_only_affects_standing_diff() {
         .unwrap();
 
     let now2 = store.now();
-    assert!(access::standing_diff(&store, &grant.id, 0, now2).is_none());
+    assert!(access::standing_diff(&store, &grant.id, None, now2).is_none());
 
     let request = Request {
         id: "r_1".to_string(),
@@ -1325,12 +1325,12 @@ fn standing_diff_revoked_and_since_seq_round_trip() {
     let seq_after_a = store.seq_of(&a.id).unwrap();
     let now = store.now();
 
-    let first_diff = access::standing_diff(&store, &grant.id, 0, now).unwrap();
+    let first_diff = access::standing_diff(&store, &grant.id, Some(0), now).unwrap();
     assert_eq!(first_diff.len(), 1);
     assert_eq!(first_diff[0].value, serde_json::json!("Sushi"));
 
     // Nothing changed since: passing the last-sent seq back yields nothing.
-    let empty_diff = access::standing_diff(&store, &grant.id, seq_after_a, now).unwrap();
+    let empty_diff = access::standing_diff(&store, &grant.id, Some(seq_after_a), now).unwrap();
     assert!(
         empty_diff.is_empty(),
         "no double-send when nothing changed since the last push"
@@ -1338,7 +1338,8 @@ fn standing_diff_revoked_and_since_seq_round_trip() {
 
     let b = put(&mut store, "preferences.food", None, "Ramen", you());
     let seq_after_b = store.seq_of(&b.id).unwrap();
-    let second_diff = access::standing_diff(&store, &grant.id, seq_after_a, store.now()).unwrap();
+    let second_diff =
+        access::standing_diff(&store, &grant.id, Some(seq_after_a), store.now()).unwrap();
     assert_eq!(
         second_diff.len(),
         1,
@@ -1346,10 +1347,124 @@ fn standing_diff_revoked_and_since_seq_round_trip() {
     );
     assert_eq!(second_diff[0].value, serde_json::json!("Ramen"));
 
-    let nothing_new = access::standing_diff(&store, &grant.id, seq_after_b, store.now()).unwrap();
+    let nothing_new =
+        access::standing_diff(&store, &grant.id, Some(seq_after_b), store.now()).unwrap();
     assert!(nothing_new.is_empty());
 
     // Revoked -> None, independent of standing/expiry.
     store.revoke_grant(&grant.id).unwrap();
-    assert!(access::standing_diff(&store, &grant.id, 0, store.now()).is_none());
+    assert!(access::standing_diff(&store, &grant.id, None, store.now()).is_none());
+}
+
+/// Persisted standing checkpoint (team-lead follow-up, "Decided while
+/// building" round 3): `standing_diff` with `since_seq: None` defaults to
+/// the grant's last checkpoint, and that checkpoint survives a reload from
+/// the same frames — the actual bug being fixed (an in-memory-only watermark
+/// resets to 0 on reload and re-announces everything already pushed).
+#[test]
+fn standing_checkpoint_persists_across_reload() {
+    let mut store = Store::new(env());
+    let grant = store
+        .set_grant(
+            "agent-1".to_string(),
+            "fp-1".to_string(),
+            vec![GrantRule {
+                selector: "preferences.food.name".to_string(),
+                mode: GrantMode::Auto,
+            }],
+            vec![],
+            Some(Standing {
+                expires_at: store.now() + 1_000_000,
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        store.list_grants()[0].last_pushed_seq,
+        None,
+        "no checkpoint recorded yet"
+    );
+
+    let pushed = put(&mut store, "preferences.food", None, "Sushi", you());
+    let pushed_seq = store.seq_of(&pushed.id).unwrap();
+
+    // No since_seq given: defaults to the grant's creation seq (before
+    // `pushed` was written), so the new fact shows up.
+    let diff = access::standing_diff(&store, &grant.id, None, store.now()).unwrap();
+    assert_eq!(diff.len(), 1);
+    assert_eq!(diff[0].value, serde_json::json!("Sushi"));
+
+    // The push "succeeds"; the worker checkpoints what it just sent.
+    store
+        .set_standing_checkpoint(&grant.id, pushed_seq)
+        .unwrap();
+    assert_eq!(store.list_grants()[0].last_pushed_seq, Some(pushed_seq));
+
+    // Same store, no explicit since_seq: nothing new since the checkpoint.
+    let diff_again = access::standing_diff(&store, &grant.id, None, store.now()).unwrap();
+    assert!(
+        diff_again.is_empty(),
+        "default baseline must move to the new checkpoint immediately"
+    );
+
+    // Reload into a fresh store from the same frames (the actual regression:
+    // this used to lose the watermark and re-announce "Sushi").
+    let mut frames = Vec::new();
+    for compartment in ["system", "preferences"] {
+        frames.push((compartment.to_string(), store.take_frame(compartment)));
+    }
+    let mut reloaded = Store::new(env());
+    for (compartment, bytes) in &frames {
+        reloaded.load_frame(compartment, bytes).unwrap();
+    }
+    reloaded.finish_open();
+
+    assert_eq!(
+        reloaded.list_grants()[0].last_pushed_seq,
+        Some(pushed_seq),
+        "the checkpoint itself must survive reload"
+    );
+    let diff_after_reload =
+        access::standing_diff(&reloaded, &grant.id, None, reloaded.now()).unwrap();
+    assert!(
+        diff_after_reload.is_empty(),
+        "reload must not re-announce a fact already pushed before restart"
+    );
+}
+
+/// A grant that has never had a standing push yet defaults to its own
+/// creation seq, not 0 — otherwise its very first `standing_diff` would
+/// include data written to *other* compartments/nodes long before the grant
+/// existed, if that data happened to also be `auto`-visible under it.
+#[test]
+fn standing_diff_defaults_to_grant_creation_seq_when_uncheckpointed() {
+    let mut store = Store::new(env());
+    // Written before the grant exists; still `preferences.food.name`.
+    put(&mut store, "preferences.food", None, "Pre-existing", you());
+
+    let grant = store
+        .set_grant(
+            "agent-1".to_string(),
+            "fp-1".to_string(),
+            vec![GrantRule {
+                selector: "preferences.food.name".to_string(),
+                mode: GrantMode::Auto,
+            }],
+            vec![],
+            Some(Standing {
+                expires_at: store.now() + 1_000_000,
+            }),
+        )
+        .unwrap();
+
+    let diff = access::standing_diff(&store, &grant.id, None, store.now()).unwrap();
+    assert!(
+        diff.is_empty(),
+        "data written before the grant existed must not appear in its first standing diff, got {diff:?}"
+    );
+
+    let after = put(&mut store, "preferences.food", None, "Fresh", you());
+    let diff2 = access::standing_diff(&store, &grant.id, None, store.now()).unwrap();
+    assert_eq!(diff2.len(), 1);
+    assert_eq!(diff2[0].value, serde_json::json!("Fresh"));
+    let _ = after;
 }

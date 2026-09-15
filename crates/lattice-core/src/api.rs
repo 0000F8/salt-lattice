@@ -63,7 +63,17 @@ fn default_disclosure_kind() -> DisclosureKind {
 #[derive(Debug, Deserialize)]
 struct StandingDiffArgs {
     grant_id: String,
-    since_seq: u64,
+    /// Optional (decided while building): omit or pass `null` to default to
+    /// the grant's persisted checkpoint, or its creation seq if none exists
+    /// yet — see `access::standing_diff`.
+    #[serde(default)]
+    since_seq: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StandingCheckpointArgs {
+    grant_id: String,
+    seq: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,6 +205,11 @@ fn dispatch(store: &mut Store, op: &str, args: &str) -> LatticeResult<serde_json
                 a.since_seq,
                 now,
             )))
+        }
+        "standing_checkpoint" => {
+            let a: StandingCheckpointArgs = parse_args(args)?;
+            store.set_standing_checkpoint(&a.grant_id, a.seq)?;
+            Ok(serde_json::json!({ "grant_id": a.grant_id, "seq": a.seq }))
         }
         "disclosure_log" => {
             let a: DisclosureLogArgs = parse_args(args)?;
