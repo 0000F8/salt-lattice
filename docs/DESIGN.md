@@ -1,0 +1,258 @@
+# Lattice design (phase 1 contract)
+
+This is the spec the crate, the wasm wrapper and the worker are built against. Where the proposal
+(https://claude.ai/artifact/SSPnMuXJuhj2BdSzBFu3Xc) and this file differ, this file wins: it records the
+decisions made while building. Rules named **R1..R14** must each have a failing-then-passing test.
+
+## 1. Layout
+
+```
+Cargo.toml                    workspace
+crates/lattice-core/          pure Rust, no wasm deps: schema, nodes, links, versions, store, index,
+                              queries, grants, evaluation, release, disclosure log, proposals
+crates/lattice-wasm/          wasm-bindgen wrapper; JSON strings across the boundary; one `call` entry
+web/                          lattice.worker.js (OPFS + WebCrypto + wasm), lattice.js (main-thread client),
+                              tests (vitest in node, Playwright in Chromium/WebKit/Firefox)
+docs/                         this file, SCHEMA.md (generated from the crate), GATES.md (measurements)
+```
+
+Dependencies (keep this list short; every crate costs size): `serde`, `serde_json`, `wasm-bindgen`, `js-sys`.
+Nothing else without a measured reason. No crypto in Rust: **WebCrypto does all encryption in the worker**;
+the core only ever sees plaintext records. No `getrandom`: the core takes an `Env { now_ms, random_u64 }`
+supplied by the wrapper (js-sys `Date.now()` and `crypto.getRandomValues`).
+
+Profile: `opt-level = "z"`, `lto = true`, `codegen-units = 1`, `panic = "abort"`; `wasm-opt -Oz` after
+`wasm-bindgen`. Gate: the `.wasm` **under 300 KB after gzip -9** (also record brotli).
+
+## 2. Compartments and the schema
+
+Compartments are a closed enum: `identity, health, finances, preferences, relationships, schedule, work,
+system`. `system` holds grants, the disclosure log and the destroy markers; it never holds a fact about
+the person and grants can never name it.
+
+A node type is a dotted name whose **first segment is its compartment**, e.g. `preferences.food.cuisine`.
+The schema is a static table in the crate (`schema.rs`), versioned by `SCHEMA_VERSION` (starts at 1),
+exported verbatim by `schema_json()` and rendered to `docs/SCHEMA.md` by a test that fails when the file
+is stale. Each `TypeDef` has: `name`, `parent: Option<type name>` (the type it nests under; a node of a
+nested type MUST point `parent` at a node of exactly that type; a top-level type has `parent = None`),
+`fields: [FieldDef { name, kind, required }]` with `kind` in `text | number | bool | date | enum(values)`.
+Every type has a `name: text` field (what a row is called) and an optional `note: text`; those two are what
+full-text search indexes. `LinkDef { name, from: [types], to: [types] }` lists the typed edges; `attends`,
+`works_with`, `prefers_over`, `related_to`, `lives_at`, `works_at` at minimum.
+
+Initial types (the crate may add, never invent free-form): identity.person (the root; name, birthday,
+pronouns, languages), identity.location (name, kind enum home|work|other, city, country),
+identity.contact_channel (name, kind enum email|phone|handle, value); preferences.food (name,
+note), preferences.food.cuisine (name, strength number 0..1, note), preferences.food.dish,
+preferences.food.restriction (name, kind enum allergy|diet|dislike, severity enum), preferences.music
+(name), preferences.music.genre, preferences.music.artist, preferences.travel (name), preferences.travel.style,
+preferences.travel.place; relationships.person (name, relation enum partner|family|friend|colleague|other,
+note), relationships.person.detail (name, value), relationships.pet (name, species); schedule.routine (name,
+days enum-list, time, note), schedule.event (name, starts date, ends date, place, note); work.employer (name,
+city), work.role (name, since date), work.project (name, note); health.condition (name, since date, note),
+health.allergy (name, severity enum), health.medication (name, dose, schedule); finances.budget (name,
+amount number, currency, period enum), finances.goal (name, amount number, currency, by date), finances.subscription
+(name, amount, currency, period enum, note). **There is deliberately no type for a private key, seed phrase,
+password, account number or card** (R14 tests that no type or field in the schema matches those words).
+
+Closed schema (R1): a node whose type or field is not in the schema is refused with a typed error; an agent
+cannot register a type.
+
+## 3. Nodes, versions, links, proposals
+
+```
+Node { id, type, parent: Option<id>, fields: {name: value}, compartment, author: {kind: you|agent|ion,
+       fingerprint: Option<hex>}, status: accepted|pending|rejected|deleted, version: u32,
+       created: u64 ms, updated: u64 ms }
+Link { id, type, from: node id, to: node id, author, created, status: accepted|pending|deleted }
+```
+
+Ids are `n_`/`l_`/`g_`/`d_` + 26-char Crockford ULID built from `Env` (time + random). Every write is a
+**new version**; the store keeps every version (R2: after three edits, `versions(id)` returns three and the
+current node is the last). `status` changes are versions too. Delete is a version with `status = deleted`;
+deleted and rejected nodes are invisible to every query and every release but stay in `versions`.
+
+**Proposals (R3):** a write whose author is an agent lands `pending` unless the grant for that
+fingerprint lists the node's compartment in `trusted_writes`, in which case it lands `accepted`. A write by
+`you` or `ion` with no grant: `you` lands accepted, `ion` always lands pending. `accept(id)` / `reject(id)`
+move a pending node. Pending nodes are never released (R4).
+
+## 4. Queries
+
+- `query { path, filters, status?, limit? }`: `path` is the type path with `/` separators and an optional
+  trailing `*` or name: `preferences/food/*` = every node whose type starts with `preferences.food`;
+  `preferences/food/cuisine` = that exact type; `preferences/food/cuisine/Japanese` = that type with
+  `fields.name == "Japanese"` (case-insensitive). `filters: [{field, op: eq|ne|contains|gt|lt, value}]`.
+  Default status filter is `accepted` only.
+- `traverse { from, link_types?, depth (1..=4), direction: out|in|both }` returns nodes and the links walked.
+- `search { text, limit }`: on-device full-text over `name` and `note`, lowercase Unicode-alphanumeric
+  tokens, prefix match on the last token, ranked by hits then recency.
+
+## 5. Store format and the open path
+
+The core is log-structured. A `Record { seq, ts, compartment, body }` with body one of `Node`, `Link`,
+`Grant`, `RevokeGrant`, `Disclosure`, `DestroyCompartment`. `seq` is global and monotonic. On disk the
+worker keeps **one file per compartment** in the OPFS directory `lattice/v1/`, made of frames:
+`[u32 LE plaintext-independent length][12-byte nonce][AES-256-GCM ciphertext+tag]`. A frame's plaintext is
+newline-separated JSON records. The core never sees frames' ciphertext:
+
+- `open()` → the wrapper calls `load_frame(compartment, plaintext_bytes)` for each decrypted frame, then
+  `finish_open()`, which sorts by `seq` and builds the index. Compartments not loaded are simply absent;
+  loading one later is `load_frame` + `finish_open` again (idempotent).
+- Writes accumulate per compartment; `take_frame(compartment) -> bytes` hands the wrapper the plaintext of
+  everything written since the last take, which the worker encrypts and appends. `pending_compartments()`
+  says which have anything to flush. The worker flushes after every mutating call before answering it, so
+  a caller's `await` means "on disk".
+- Gate: a store of 5,000 nodes (built by the perf test, spread across compartments) opens in **under
+  100 ms** measured inside the worker from first `load_frame` to `finish_open` returning, on Playwright
+  WebKit and Chromium on this machine; the number and the machine go in `docs/GATES.md`. The iOS 16
+  Simulator run is owed and noted as such.
+
+Compaction: `compact(compartment)` returns one frame plaintext with only current versions + the
+versions list, for the worker to rewrite the file; not run automatically in phase 1.
+
+## 6. Keys (worker, not core)
+
+- Root: 32 random bytes from `crypto.getRandomValues`, imported as a **non-extractable HKDF** `CryptoKey`
+  and stored as that object in IndexedDB database `lattice-keys`, store `keys`, key `root`. Never derived
+  from any password. Never touches Salt's vault modules; the worker has no import of them.
+- The raw 32 bytes exist in the worker exactly once, at generation, and are returned by `create_root()` to
+  the app **so the app can hand them to the vault as opaque bytes** for backup (the one documented
+  touchpoint, done by a glue module in salt-fe, never inside the worker). `restore_root(raw)` re-imports
+  them on a new device.
+- Compartment key = HKDF-SHA256(root, salt = `"lattice/v1"`, info = compartment name) → AES-256-GCM,
+  non-extractable, derived on demand, never stored. AAD for every frame = `"lattice/v1/" + compartment`.
+- `destroy_compartment(c)` (R11): deletes the compartment's file, and the core records a
+  `DestroyCompartment` marker in `system`; nodes of that compartment vanish from every query. Since keys are
+  derived, "destroy" is the file deletion plus the marker, which makes any later restore of that file refuse
+  to load it. (Per-compartment random keys would let us destroy the key instead; recorded as a phase 2
+  option in CLAUDE.md.)
+- The main thread calls `navigator.storage.persist()` on first open and reports the answer.
+
+## 7. Grants, requests, evaluation, release, log
+
+```
+Grant { id, agent_id: string (Salt user id), agent_fingerprint: hex, rules: [{selector, mode: auto|ask}],
+        trusted_writes: [compartment], standing: Option<{ expires_at }>, created, revoked: Option<u64> }
+Selector: "compartment.*" | "type.*" | "type.field"  (most specific wins; `system.*` refused)
+Request { id, agent_id, agent_fingerprint, purpose: string, asks: [selector], channel: private|group }
+```
+
+- `evaluate(request) -> Evaluation { auto: [Fact], ask: [ConsentItem], omitted: usize }`. Only `accepted`
+  nodes. For each ask selector, the grant rule that applies is the most specific matching one; `auto` →
+  the fact goes in `auto`; `ask` → `ConsentItem { selector, node_id, field, value }` (values are shown
+  to the person on the consent sheet, never sent until approved); no rule → counted in `omitted` and
+  nothing else. `omitted` never leaves the phone; the release payload has no field that could carry it.
+- `release(request_id, facts) -> (ReleasePayload, DisclosureEntry)`. `ReleasePayload { request_id,
+  facts: [Fact { path, type, field, value, author: you|agent, updated }] }`. `DisclosureEntry { id, ts,
+  agent_id, agent_fingerprint, grant_id, request_id, purpose, kind: on_demand|standing, fields: [{path,
+  field}] }` is appended to `system` (R12: every release writes exactly one entry, and `disclosure_log
+  {agent_id?, limit, before?}` returns them newest first).
+- `standing_diff(grant_id, since_seq) -> Option<[Fact]>`: facts under that grant's `auto` selectors changed
+  since `since_seq`; `None` when the grant is revoked, expired, or has no standing. The worker calls it after
+  every flush and the app sends the push; each push goes through `release(kind = standing)`.
+
+Rules, each a test:
+- **R5** No grant, revoked grant (`revoked` set), expired standing (only affects `standing_diff`), or a
+  fingerprint that differs from the grant's for the same `agent_id` → `evaluate` returns
+  `{auto: [], ask: [], omitted: n}` and `release` produces a payload **byte-identical** to the one produced
+  for an agent with a valid grant whose selector matches no data. Omission is indistinguishable from absence.
+- **R6** `channel: group` → `evaluate` returns `Err(GroupChannel)`; nothing is computed. (salt-fe redirects
+  to a sidechain and re-asks with `private`.)
+- **R7** `Fact.author` is only ever `you` or `agent` — never a fingerprint, id or name (test that a fact
+  written by agent A and released to agent B carries `agent`).
+- **R8** A selector naming `system.*` in a grant is refused at `set_grant`.
+- **R9** `ask` items are never in `auto`; approving a subset releases exactly that subset.
+- **R10** A grant `rules` change is a new grant version (grants are records too; `list_grants` returns
+  current ones; revoked ones stay in the log).
+- **R13** Standing: a grant with `standing.expires_at < now` yields `None` from `standing_diff`, and
+  `evaluate` for the same grant still works on demand.
+
+## 8. Wasm surface (`crates/lattice-wasm`)
+
+Exactly these exports, to keep glue small: `class Lattice { constructor(); schemaJson(): string;
+loadFrame(compartment: string, bytes: Uint8Array): void; finishOpen(): void; takeFrame(compartment):
+Uint8Array; pendingCompartments(): string; call(op: string, argsJson: string): string }`. `call` dispatches
+every op named in §3–§7 plus `stats` (node/link/version counts per compartment, seq) and returns
+`{"ok": ...}` or `{"error": {"code", "message"}}`; a Rust panic is a bug and tests assert none.
+
+## 9. Worker protocol (`web/lattice.worker.js`)
+
+Messages `{id, op, args}` → `{id, ok: true, result}` | `{id, ok: false, error: {code, message}}`. Ops:
+`open {compartments?}`, `close`, `createRoot` (returns raw bytes once), `restoreRoot {raw}`, `hasRoot`,
+`destroyCompartment {compartment}`, `exportBackup` (the encrypted files concatenated with a manifest; still
+ciphertext), `importBackup {blob}`, `stats`, and passthrough `call {op, args}`. `web/lattice.js` exposes
+`openLattice({workerUrl?}) -> { call(op, args), ... }` as promises. The worker never imports anything from
+outside `web/`.
+
+## 10. Tests and gates
+
+- `cargo test -p lattice-core`: every rule R1–R14, schema doc freshness, store round trip (write → take →
+  load → identical queries), 5,000-node build + serialize used by the perf test.
+- `web/`: vitest (node) loading the wasm via `initSync`, covering the worker's pure parts (frame encoding,
+  HKDF/AES via Node's WebCrypto) and the client; Playwright (`web/playwright.config.js`) running the real
+  worker on Chromium, WebKit and Firefox: root create/restore, write/read across reload, destroy, backup
+  export/import, and the 100 ms open gate with the numbers written to `docs/GATES.md`.
+- `npm run size` prints the compressed wasm size and fails over 300 KB.
+
+## Decided while building (`crates/lattice-core`, 2026-09-15)
+
+DESIGN.md above left the following open; each was resolved while writing the crate so the wasm wrapper and
+worker can build against a settled contract. `cargo test -p lattice-core` is green (22 tests: R1–R14, schema
+doc freshness, store round trip, idempotent open, the 5,000-node perf fixture), `cargo fmt` is clean and
+`cargo clippy -p lattice-core -- -D warnings` is clean. The crate also builds for `wasm32-unknown-unknown`
+today even without `lattice-wasm` filled in yet.
+
+- **`FieldKind::EnumList`**: §2's kind list (`text|number|bool|date|enum(values)`) doesn't cover
+  `schedule.routine`'s `days`. Added a fifth kind, `enum_list(values)`, used only there. `identity.person.languages`
+  stays plain `text` (no free-text-list kind exists) — a comma-separated string.
+- **Concrete enum value sets** the design named without spelling out: `finances.budget.period` /
+  `finances.subscription.period` = `weekly|monthly|yearly`; `preferences.food.restriction.severity` /
+  `health.allergy.severity` = `mild|moderate|severe`.
+- **Link `from`/`to` endpoint sets** (§2 named the six links with no endpoints): `attends` and `works_at`/`lives_at`
+  run from `identity.person` or `relationships.person` to `schedule.event` / `work.employer` / `identity.location`
+  respectively; `works_with` and `related_to` connect people to people (`related_to` restricted to
+  `relationships.person`, since it's the "how the people you know relate to each other" edge); `prefers_over`
+  connects any two nodes of the same preference-leaf type (cuisine/dish/genre/artist/style/place) to each other.
+- **Required fields**: only `name` and the fields §2 explicitly showed as clearly load-bearing
+  (`identity.location.kind`, `identity.contact_channel.kind`/`value`, `preferences.food.restriction.kind`,
+  and the three `finances.*` `amount`/`currency`) are `required: true`. Everything else is optional — closed
+  schema (R1) doesn't need every field mandatory, and being permissive here is easy to tighten later.
+- **Fact.path** is the query-path-shaped string DESIGN.md §4 already uses for reads (e.g.
+  `preferences/food/cuisine/Japanese`: the type's dotted segments joined by `/`, plus the node's `name`), not
+  a raw node id — an agent gets something legible, never an opaque ULID, and it doubles as the `path` a
+  `DisclosureEntry.fields` entry logs.
+- **Author masking on release (R7)**: `Ion`-authored facts are masked as `you`, not `agent` — Ion is
+  described in the top-level CLAUDE.md as on-device and first-party ("fills Lattice from the person's own
+  conversations"), so it reads as the person's own record, not a third party's. Only a genuine `Agent` author
+  masks to `agent`.
+- **Grant versioning mechanics (R10)**: `set_grant` for an `agent_id` that already has a current grant
+  appends a `RevokeGrant` record for the old grant *and* a fresh `Grant` record (new id) in the same call;
+  `list_grants()` returns one current (non-revoked) grant per agent, `all_grants_including_revoked()` is the
+  full history for anything that needs it (tests, an eventual admin view).
+- **`release`'s exact signature** is `release(store, request, facts, kind)`, not literally
+  `release(request_id, facts)` as §7's prose shorthand suggests — `api::call`'s dispatcher is stateless
+  between calls (no `Request` is ever persisted; it isn't a `RecordBody` variant), so the caller passes the
+  whole `Request` each time. The payload itself still depends on nothing but `request.id` and `facts`, which
+  is what makes R5's byte-identical claim hold.
+- **Selector validity is checked at `set_grant` time**, not just at evaluation time: a rule whose selector
+  doesn't parse against the schema is refused outright (`invalid_selector`), which is also how the `system.*`
+  guard (R8) generalizes to any selector that would resolve into the `system` compartment, not just the
+  literal string `"system.*"`.
+- **Delete only ever runs as `you`** (`delete_node`/`delete_link` take no author). An agent's pending
+  *create*/*edit* proposal can be rejected, but there is no pending-delete concept — a pending node's status
+  is just `Pending`, and `accept()` on it can only restore the proposed fields, not "restore, then also
+  delete." Agent-initiated deletion is deferred to phase 2 if it turns out to be needed, with its own
+  representation rather than overloading `Status`.
+- **Compaction and frame IO are direct `Store` methods, not `api::call` ops.** `load_frame`/`finish_open`/
+  `take_frame`/`pending_compartments`/`compact` all move raw bytes, which don't round-trip through the
+  `{"ok"/"error"}` JSON envelope cleanly; §8's wasm surface already lists them as separate `Lattice` methods
+  alongside `call`, so `lattice-wasm` should bind them the same way (`compact` wasn't in the §8 list —
+  treat it like `takeFrame`: a `Uint8Array`-returning method, not a `call` op).
+- **Nested-type fixtures were skipped for the perf test.** `fixtures::populate` only ever writes top-level
+  (parentless) types — there are 19 of them across every non-`system` compartment, so 5,000 nodes still
+  spread realistically — rather than also building `preferences.food.cuisine`-under-`preferences.food` style
+  parent chains, which would have added bookkeeping without changing what the open-time gate measures.
+- **Query `status` filter**: `QueryInput.status` is `None` (accepted-only, the DESIGN.md default), `Some("all")`
+  (bypass the filter — needed by `r11_destroy_compartment`'s test, and by any future "show me pending
+  proposals" UI), or the name of one `Status` variant.

@@ -1,0 +1,13 @@
+[package]
+name = "lattice-core"
+version = "0.1.0"
+edition = "2021"
+description = "Pure Rust core for Lattice: schema, nodes, links, versions, store, queries, grants, access evaluation, release, disclosure log, proposals. No wasm deps, no crypto: WebCrypto does encryption in the worker, this crate only ever sees plaintext records."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+default = ["fixtures"]
+fixtures = []
