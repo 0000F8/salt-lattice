@@ -72,18 +72,21 @@ export default async function writeGates() {
   lines.push("");
   lines.push("## Open gate (§5: 5,000-node store, first `loadFrame` -> `finishOpen` returning, under 100 ms)");
   lines.push("");
-  lines.push("Gated (must be under 100 ms) on Chromium and WebKit; Firefox is recorded but not gated.");
+  lines.push("`loadMs` is wasm-only (excludes OPFS/WebCrypto) and is gated (must be under 100 ms) on Chromium and WebKit; Firefox is recorded but not gated.");
   lines.push("");
-  lines.push("| Browser | Nodes | loadMs | Gate |");
-  lines.push("|---|---|---|---|");
+  lines.push("`wallMs` is the whole `open()` call, message-in to reply-out — IO (OPFS reads) + AES-GCM decrypt + `loadFrame` + `finishOpen` — what a phone actually waits for. Recorded on every browser; never gated (no on-device measurement exists yet to gate it against).");
+  lines.push("");
+  lines.push("| Browser | Nodes | loadMs | Gate | wallMs |");
+  lines.push("|---|---|---|---|---|");
   if (results.length === 0) {
-    lines.push("| (no results — run `npm run test:browsers`) | | | |");
+    lines.push("| (no results — run `npm run test:browsers`) | | | | |");
   } else {
     for (const r of results) {
       const gated = r.browser !== "firefox";
       const pass = r.loadMs < 100;
       const gateCell = gated ? (pass ? "PASS" : "FAIL") : "recorded only";
-      lines.push(`| ${r.browser} | ${r.nodeCount} | ${r.loadMs.toFixed(2)} | ${gateCell} |`);
+      const wallCell = typeof r.wallMs === "number" ? r.wallMs.toFixed(2) : "(not recorded)";
+      lines.push(`| ${r.browser} | ${r.nodeCount} | ${r.loadMs.toFixed(2)} | ${gateCell} | ${wallCell} |`);
     }
   }
   lines.push("");
@@ -92,6 +95,7 @@ export default async function writeGates() {
   lines.push("- These are desktop-browser numbers on the machine above, not the iOS 16 Simulator gate CLAUDE.md notes as still owed.");
   lines.push("- WebKit and Firefox here are Playwright's bundled desktop builds pinned to `@playwright/test` 1.48.0 (see package.json), because this machine (macOS 12/mac12-arm64) isn't supported by Playwright releases newer than that. That version predates the fix for GHSA-7mvr-c777-76hp (TLS validation during browser-binary download); the risk is confined to the one-time `playwright install` step, not to running these tests, so it was accepted rather than left on a machine-incompatible newer release.");
   lines.push("- Firefox's number is noisy run to run (a few hundred ms of variance observed) and is not gated for that reason; Chromium and WebKit were consistently well under 100 ms across repeated runs.");
+  lines.push("- `wallMs` includes this run's OPFS + WebCrypto overhead on desktop Chromium/WebKit/Firefox, not on-device iOS Safari; treat it as directional until the iOS 16 Simulator run above happens.");
   lines.push("");
 
   mkdirSync(path.join(rootDir, "docs"), { recursive: true });

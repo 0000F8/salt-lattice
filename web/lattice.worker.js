@@ -203,6 +203,13 @@ async function flushPending() {
 // -------------------------------------------------------------------- ops
 
 async function doOpen({ wasmUrl, compartments } = {}) {
+  // Wall-clock time for the whole op, message-in to reply-out: IO (OPFS
+  // reads), AES-GCM decrypt, loadFrame and finishOpen — everything a phone
+  // actually waits for. Recorded alongside `loadMs` (the wasm-only number
+  // below, which excludes IO/decrypt on purpose) so docs/GATES.md reports
+  // both what the store itself costs and what opening genuinely feels like.
+  const wallStart = now();
+
   if (!wasmReady) {
     if (!wasmUrl) {
       throw { code: "bad_request", message: "open requires wasmUrl on its first call" };
@@ -258,6 +265,8 @@ async function doOpen({ wasmUrl, compartments } = {}) {
   if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.persist) {
     persisted = await navigator.storage.persist();
   }
+
+  timings.wallMs = now() - wallStart;
 
   return {
     hasRoot: !!rootKey,

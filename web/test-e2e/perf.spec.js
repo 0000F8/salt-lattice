@@ -1,10 +1,17 @@
 // The open-performance gate (docs/DESIGN.md §5, §10): build a 5,000-node
 // store, flush (implicit: the worker flushes after every mutating `call`),
-// close, reopen, and measure first `loadFrame` -> `finishOpen` returning
-// inside the worker. Chromium and WebKit are hard-gated at under 100 ms;
-// Firefox is recorded in docs/GATES.md but not asserted (see
-// scripts/write-gates.mjs, the globalTeardown that reads the JSON this
-// writes).
+// close, reopen, and measure two numbers from the worker's `open()` result
+// (`timings`, set in web/lattice.worker.js's `doOpen`):
+//   - loadMs: first `loadFrame` -> `finishOpen` returning, wasm-only,
+//     excludes OPFS/WebCrypto. Hard-gated under 100 ms on Chromium and
+//     WebKit; Firefox is recorded but not asserted.
+//   - wallMs: the whole `open()` call, message-in to reply-out (IO +
+//     decrypt + loadFrame + finishOpen) — what a phone actually waits for.
+//     Recorded for all three browsers, never gated (docs/GATES.md says so
+//     plainly rather than asserting a number nobody has measured on-device
+//     yet).
+// Both land in docs/GATES.md via scripts/write-gates.mjs, the globalTeardown
+// that reads the JSON this test writes.
 import { test, expect, resetLatticeStorage } from "./fixtures.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -37,15 +44,20 @@ test("5,000-node store opens in under 100ms (first loadFrame -> finishOpen)", as
 
   const opened = await page.evaluate(() => window.__lattice.open());
   const loadMs = opened.timings.loadMs;
+  const wallMs = opened.timings.wallMs;
   expect(typeof loadMs).toBe("number");
+  expect(typeof wallMs).toBe("number");
 
   mkdirSync(gatesDir, { recursive: true });
   writeFileSync(
     path.join(gatesDir, `${testInfo.project.name}.json`),
-    JSON.stringify({ browser: testInfo.project.name, nodeCount: 5000, loadMs }),
+    JSON.stringify({ browser: testInfo.project.name, nodeCount: 5000, loadMs, wallMs }),
   );
 
   if (testInfo.project.name !== "firefox") {
     expect(loadMs).toBeLessThan(100);
   }
+  // wallMs (IO + decrypt + loadFrame + finishOpen) is recorded-only on
+  // every browser, per the team lead: the doc should say what opening
+  // actually feels like, not just what the store itself costs.
 });
