@@ -1,0 +1,10 @@
+target/
+node_modules/
+dist/
+pkg/
+.env
+
+# OMC scratch state. Created relative to the shell cwd, so it can appear in
+# any repo. salt-deploy refuses to deploy a dirty tree, so an untracked stray
+# here silently blocks a deploy.
+.omc/
