@@ -133,6 +133,9 @@ pub fn evaluate(store: &Store, request: &Request) -> LatticeResult<Evaluation> {
     let mut omitted = 0usize;
 
     for node in store.accepted_nodes() {
+        if store.is_destroyed(&node.compartment) {
+            continue;
+        }
         for (field_name, value) in node.fields.iter() {
             if !ask_selectors
                 .iter()
@@ -175,10 +178,22 @@ pub fn evaluate(store: &Store, request: &Request) -> LatticeResult<Evaluation> {
 
 /// Turn an approved [`ConsentItem`] into a [`Fact`] by looking its node back
 /// up (a `ConsentItem` doesn't carry `author`/`updated` on its own).
+///
+/// Re-checks that the node is still `Accepted` and its compartment isn't
+/// destroyed: time can pass between `evaluate()` offering a `ConsentItem`
+/// and the person approving it, during which the node can be deleted,
+/// rejected, or its whole compartment destroyed. Any of those makes the
+/// once-offered value stale and it must not be released.
 pub fn consent_item_to_fact(store: &Store, item: &ConsentItem) -> LatticeResult<Fact> {
     let node = store
         .get_node(&item.node_id)
         .ok_or_else(|| Error::new("not_found", "consented node no longer exists"))?;
+    if node.status != Status::Accepted || store.is_destroyed(&node.compartment) {
+        return Err(Error::new(
+            "not_found",
+            "consented node is no longer accepted",
+        ));
+    }
     Ok(Fact {
         path: node_path(node),
         type_: node.type_.clone(),
@@ -190,15 +205,44 @@ pub fn consent_item_to_fact(store: &Store, item: &ConsentItem) -> LatticeResult<
 }
 
 /// `release(request, facts) -> (ReleasePayload, DisclosureEntry)` (§7). The
-/// payload depends only on `request.id` and `facts` — R5's byte-identical
-/// claim for a no-match release follows directly from that. Exactly one
-/// [`DisclosureEntry`] is appended per call (R12).
+/// payload depends only on `request.id` and the (validated) `facts` — R5's
+/// byte-identical claim for a no-match release follows directly from that.
+/// Exactly one [`DisclosureEntry`] is appended per call (R12).
+///
+/// `release` does not simply trust the caller's `facts`: authorization is
+/// re-derived here by calling `evaluate` again and keeping only facts that
+/// still appear in its `auto` set or match one of its current `ask` items
+/// (converted through [`consent_item_to_fact`], which itself re-checks the
+/// node is still accepted and undestroyed). A fact the caller passes that
+/// no longer matches — because a grant was revoked, a node was deleted, or
+/// its compartment destroyed since `evaluate` was first called — is
+/// silently dropped rather than released. The *approval* half (which `ask`
+/// items the person actually consented to) still has to come from the
+/// caller — that consent happened once, interactively, and isn't something
+/// to re-derive — but every fact release still authorizes is one the
+/// current grant state actually allows right now.
 pub fn release(
     store: &mut Store,
     request: &Request,
     facts: Vec<Fact>,
     kind: DisclosureKind,
 ) -> LatticeResult<(ReleasePayload, DisclosureEntry)> {
+    let fresh = evaluate(store, request)?;
+    let mut currently_allowed = fresh.auto;
+    for item in &fresh.ask {
+        if let Ok(fact) = consent_item_to_fact(store, item) {
+            currently_allowed.push(fact);
+        }
+    }
+    let facts: Vec<Fact> = facts
+        .into_iter()
+        .filter(|f| {
+            currently_allowed.iter().any(|a| {
+                a.path == f.path && a.type_ == f.type_ && a.field == f.field && a.value == f.value
+            })
+        })
+        .collect();
+
     let grant_id = store
         .current_grant_for_agent(&request.agent_id)
         .map(|g| g.id.clone())
@@ -260,6 +304,9 @@ pub fn standing_diff(store: &Store, grant_id: &str, since_seq: u64, now: u64) ->
 
     let mut facts = Vec::new();
     for node in store.accepted_nodes() {
+        if store.is_destroyed(&node.compartment) {
+            continue;
+        }
         let seq = store.seq_of(&node.id).unwrap_or(0);
         if seq <= since_seq {
             continue;

@@ -127,6 +127,60 @@ describe("Lattice (wasm)", () => {
     expect(found[0].fields.name).toBe("Thai");
   });
 
+  // Review #3 / the flush-rollback fix in web/lattice.worker.js's
+  // flushPending: restoreFrame is what makes a failed encrypt+append
+  // recoverable instead of silently losing the record. This is the
+  // integration check for the JS<->wasm call signature `restoreFrame`
+  // exposes; crates/lattice-core owns testing restore_frame's own logic.
+  it("restoreFrame re-queues exactly what takeFrame just took, for the next takeFrame to include again", () => {
+    const lattice = new Lattice();
+    expectOk(
+      call(lattice, "put_node", {
+        type: "preferences.food",
+        fields: { name: "Food" },
+        author: { kind: "you" },
+      }),
+    );
+
+    const taken = lattice.takeFrame("preferences");
+    expect(taken.length).toBeGreaterThan(0);
+    expect(lattice.takeFrame("preferences").length).toBe(0); // already taken, nothing left pending
+
+    lattice.restoreFrame("preferences", taken);
+    const retaken = lattice.takeFrame("preferences");
+    expect(Array.from(retaken)).toEqual(Array.from(taken));
+
+    // The record was never lost from the in-memory index either way —
+    // restoreFrame only concerns "still needs to reach disk".
+    const found = expectOk(call(lattice, "query", { path: "preferences/food" }));
+    expect(found).toHaveLength(1);
+  });
+
+  it("restoreFrame puts restored records ahead of ones written since the failed flush", () => {
+    const lattice = new Lattice();
+    const a = expectOk(
+      call(lattice, "put_node", { type: "preferences.food", fields: { name: "A" }, author: { kind: "you" } }),
+    );
+    const taken = lattice.takeFrame("preferences"); // simulates a flush attempt that is about to fail
+    const b = expectOk(
+      call(lattice, "put_node", { type: "preferences.food", fields: { name: "B" }, author: { kind: "you" } }),
+    );
+
+    lattice.restoreFrame("preferences", taken); // the failed flush's bytes go back to the front of the queue
+    const reframe = lattice.takeFrame("preferences");
+    const ids = new TextDecoder()
+      .decode(reframe)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).body.id);
+    expect(ids).toEqual([a.id, b.id]);
+  });
+
+  it("restoreFrame surfaces a typed error on bad bytes rather than throwing an opaque wasm panic", () => {
+    const lattice = new Lattice();
+    expect(() => lattice.restoreFrame("preferences", new TextEncoder().encode("not json\n"))).toThrow();
+  });
+
   it("R5: an ungranted request and a granted-but-non-matching request release byte-identical payloads", () => {
     const lattice = new Lattice();
     expectOk(

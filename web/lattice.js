@@ -24,9 +24,19 @@ export async function openLattice({ workerUrl, wasmUrl, worker } = {}) {
   let nextId = 1;
   /** @type {Map<number, {resolve: (v: any) => void, reject: (e: any) => void}>} */
   const inFlight = new Map();
+  /** @type {Set<(update: {grantId: string, facts: any[]}) => void>} */
+  const standingListeners = new Set();
 
   w.onmessage = (event) => {
-    const { id, ok, result, error } = event.data;
+    const data = event.data;
+    // Unsolicited pushes (docs/DESIGN.md §7) carry no request `id` — they
+    // aren't a reply to anything this client sent, so they're routed to
+    // onStandingUpdate listeners instead of the request/response map.
+    if (data && data.type === "standingUpdate") {
+      for (const listener of standingListeners) listener({ grantId: data.grantId, facts: data.facts });
+      return;
+    }
+    const { id, ok, result, error } = data;
     const pending = inFlight.get(id);
     if (!pending) return;
     inFlight.delete(id);
@@ -58,7 +68,8 @@ export async function openLattice({ workerUrl, wasmUrl, worker } = {}) {
     close: () => send("close"),
     hasRoot: () => send("hasRoot"),
     createRoot: () => send("createRoot"),
-    restoreRoot: (raw) => send("restoreRoot", { raw }),
+    /** `force: true` is only for a genuinely key-less device (see docs/DESIGN.md §6 / review #2) — refuses with `root_exists` otherwise. */
+    restoreRoot: (raw, { force = false } = {}) => send("restoreRoot", { raw, force }),
     call: (op, args) => send("call", { op, args }),
     destroyCompartment: (compartment) => send("destroyCompartment", { compartment }),
     exportBackup: () => send("exportBackup"),
@@ -66,6 +77,18 @@ export async function openLattice({ workerUrl, wasmUrl, worker } = {}) {
     encryptBlob: (purpose, bytes) => send("encryptBlob", { purpose, bytes }),
     decryptBlob: (purpose, bytes) => send("decryptBlob", { purpose, bytes }),
     stats: () => send("stats"),
+    /**
+     * Subscribe to standing-grant pushes (docs/DESIGN.md §7): the worker
+     * calls `standing_diff` after every flush and, when a standing grant's
+     * `auto` fields changed, calls every registered listener with
+     * `{grantId, facts}` instead of replying to a request. Not a worker op
+     * itself — sending the actual push to the agent is the app's job.
+     * Returns an unsubscribe function.
+     */
+    onStandingUpdate: (listener) => {
+      standingListeners.add(listener);
+      return () => standingListeners.delete(listener);
+    },
     /** Not a worker op: tears down the underlying Worker (or fake) itself. */
     terminate: () => {
       if (typeof w.terminate === "function") w.terminate();

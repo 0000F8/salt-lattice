@@ -121,17 +121,7 @@ impl Store {
             return Ok(());
         }
         self.loaded_compartments.insert(compartment.to_string());
-        let text = std::str::from_utf8(bytes)
-            .map_err(|e| Error::new("bad_frame", format!("frame is not utf-8: {e}")))?;
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let record: Record = serde_json::from_str(line)
-                .map_err(|e| Error::new("bad_frame", format!("bad record json: {e}")))?;
-            self.pending_in.push(record);
-        }
+        self.pending_in.extend(parse_frame(bytes)?);
         Ok(())
     }
 
@@ -155,10 +145,29 @@ impl Store {
     // --------------------------------------------------------------- flush
 
     /// Bytes to append to `compartment`'s file: every record written since
-    /// the last `take_frame` for it. Empty if nothing is pending.
+    /// the last `take_frame` for it. Empty if nothing is pending. Removes
+    /// those records from the pending queue immediately — if the caller's
+    /// encrypt+append then fails, hand the exact same bytes back to
+    /// [`Store::restore_frame`] rather than losing them.
     pub fn take_frame(&mut self, compartment: &str) -> Vec<u8> {
         let records = self.pending_out.remove(compartment).unwrap_or_default();
         encode_frame(&records)
+    }
+
+    /// Recover from a failed flush (`docs/DESIGN.md` "Decided while
+    /// building"): re-queue the exact bytes a prior `take_frame(compartment)`
+    /// returned, so the next `take_frame` for this compartment includes them
+    /// again. The records are already reflected in the in-memory index (only
+    /// `pending_out` — "not yet durable" — ever loses them), so this does not
+    /// re-apply anything; it only restores what still needs to reach disk,
+    /// ahead of any record committed since the failed `take_frame` (which is
+    /// already queued behind it, untouched).
+    pub fn restore_frame(&mut self, compartment: &str, bytes: &[u8]) -> LatticeResult<()> {
+        let mut restored = parse_frame(bytes)?;
+        let entry = self.pending_out.entry(compartment.to_string()).or_default();
+        restored.append(entry);
+        *entry = restored;
+        Ok(())
     }
 
     pub fn pending_compartments(&self) -> Vec<String> {
@@ -332,6 +341,13 @@ impl Store {
             .as_str()
             .to_string();
 
+        if self.is_destroyed(&compartment) {
+            return Err(Error::new(
+                "compartment_destroyed",
+                format!("compartment '{compartment}' has been destroyed"),
+            ));
+        }
+
         let (id, created, version) = match &input.id {
             Some(id) => {
                 let existing = self
@@ -396,6 +412,13 @@ impl Store {
         }
 
         let compartment = from_node.compartment.clone();
+        if self.is_destroyed(&compartment) {
+            return Err(Error::new(
+                "compartment_destroyed",
+                format!("compartment '{compartment}' has been destroyed"),
+            ));
+        }
+
         let status = match self.initial_status(&input.author, &compartment) {
             Status::Accepted => LinkStatus::Accepted,
             _ => LinkStatus::Pending,
@@ -759,6 +782,27 @@ impl Store {
             compartments,
         }
     }
+}
+
+/// Parse a frame's plaintext (newline-separated JSON records) into
+/// [`Record`]s, without applying them to any index. Shared by `load_frame`
+/// (which queues the result for `finish_open`) and `restore_frame` (which
+/// re-queues it directly onto `pending_out`, since the records are already
+/// applied).
+fn parse_frame(bytes: &[u8]) -> LatticeResult<Vec<Record>> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|e| Error::new("bad_frame", format!("frame is not utf-8: {e}")))?;
+    let mut records = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let record: Record = serde_json::from_str(line)
+            .map_err(|e| Error::new("bad_frame", format!("bad record json: {e}")))?;
+        records.push(record);
+    }
+    Ok(records)
 }
 
 fn encode_frame(records: &[Record]) -> Vec<u8> {

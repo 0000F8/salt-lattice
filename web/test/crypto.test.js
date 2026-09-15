@@ -151,4 +151,50 @@ describe("backup packaging", () => {
     const decoded = decodeBackup(encodeBackup(manifest, []));
     expect(decoded.files).toEqual([]);
   });
+
+  // Review #8: decodeBackup used to trust the manifest's declared file
+  // count outright, so a short manifest silently dropped trailing files
+  // instead of failing import outright.
+  it("refuses a manifest that undercounts its own files (trailing bytes left over)", () => {
+    const files = [
+      { name: "identity", bytes: new Uint8Array([1, 2, 3]) },
+      { name: "preferences", bytes: new Uint8Array([4, 5]) },
+    ];
+    // Manifest only lists the first file, but both files' bytes are present.
+    const manifest = { version: 1, exportedAt: 1, files: [{ name: "identity", size: 3 }] };
+    const blob = encodeBackup(manifest, files);
+    expect(() => decodeBackup(blob)).toThrow(/trailing bytes/);
+  });
+
+  it("refuses a manifest whose declared file block is missing (overcounts its own files)", () => {
+    const manifest = {
+      version: 1,
+      exportedAt: 1,
+      files: [{ name: "identity", size: 3 }, { name: "preferences", size: 5 }],
+    };
+    // Only one file's bytes actually follow the manifest.
+    const blob = encodeBackup(manifest, [{ name: "identity", bytes: new Uint8Array([1, 2, 3]) }]);
+    expect(() => decodeBackup(blob)).toThrow(/missing the file block/);
+  });
+
+  it("refuses a manifest with no files array", () => {
+    const blob = encodeBackup({ version: 1 }, []);
+    expect(() => decodeBackup(blob)).toThrow(/no files array/);
+  });
+
+  it("refuses a manifest with an unnamed file entry", () => {
+    const manifest = { version: 1, files: [{ size: 3 }] };
+    const blob = encodeBackup(manifest, [{ name: "whatever", bytes: new Uint8Array([1, 2, 3]) }]);
+    expect(() => decodeBackup(blob)).toThrow(/no name/);
+  });
+
+  it("refuses bytes too short to contain a manifest at all", () => {
+    expect(() => decodeBackup(new Uint8Array([1, 2]))).toThrow(/too short/);
+  });
+
+  it("refuses a truncated manifest length prefix", () => {
+    const bad = new Uint8Array(4);
+    new DataView(bad.buffer).setUint32(0, 1000, true); // claims a 1000-byte manifest that isn't there
+    expect(() => decodeBackup(bad)).toThrow(/truncated backup manifest/);
+  });
 });

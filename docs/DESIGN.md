@@ -256,3 +256,48 @@ today even without `lattice-wasm` filled in yet.
 - **Query `status` filter**: `QueryInput.status` is `None` (accepted-only, the DESIGN.md default), `Some("all")`
   (bypass the filter — needed by `r11_destroy_compartment`'s test, and by any future "show me pending
   proposals" UI), or the name of one `Status` variant.
+
+## Decided while building, round 2 (review fixes, 2026-09-15)
+
+A review of the `lattice` branch (`crates/lattice-core`, `crates/lattice-wasm`, `web/`) found three blockers
+and two should-fix items on the crate side (destroy-compartment disclosure leak, no flush-failure recovery,
+no re-check on consent/release); this round closes all of them. `cargo test -p lattice-core` is green (31
+tests: the original 22 plus 9 new — a destroy-leak regression test, a `put_link`-into-a-destroyed-compartment
+test, `restore_frame` recovery + a malformed-bytes rejection, a consent-recheck test, two `release`
+re-validation tests, a most-specific-selector-conflict test, and a `standing_diff` revoked/round-trip test),
+`cargo fmt` and `cargo clippy --workspace --all-targets -- -D warnings` are both clean, and `pkg/` was
+rebuilt via `scripts/build-wasm.sh` (164.6 KB gzip, still well under the 300 KB gate).
+
+- **Destroyed-compartment writes are now refused outright** (`compartment_destroyed`), in both `put_node`
+  (checked right after the type resolves the compartment) and `put_link` (checked against the `from` node's
+  compartment). Previously nothing stopped a write from landing `Accepted` in a destroyed compartment, and
+  since `evaluate`/`standing_diff` didn't filter on `is_destroyed` either (unlike `query`/`traverse`/`search`,
+  which already did), that data could be disclosed to an agent even though the person's own UI showed
+  nothing — the one place destruction didn't actually mean "vanishes from every query" (§6). `evaluate` and
+  `standing_diff` also gained the same `!store.is_destroyed(&node.compartment)` filter as defense in depth,
+  matching `query.rs`'s existing pattern: given the write-refusal, a live node in a destroyed compartment
+  should never occur (`purge_compartment` removes every node of that compartment from the index the instant
+  it's destroyed), but the filter costs nothing and protects against that invariant changing later.
+- **Flush-failure recovery: `restore_frame(compartment, bytes)`, not `ack_frame`.** `take_frame` is
+  unchanged (still destructive — removes the compartment's pending records and hands back the bytes). The
+  new `Store::restore_frame`/wasm `restoreFrame` takes those exact bytes back on a failed encrypt+append and
+  re-queues them onto `pending_out`, ahead of anything written during the failed attempt (which was never
+  removed — `take_frame` doesn't block new writes). Chosen over `ack_frame` because an ack design needs a
+  watermark (a count or last-seq) to avoid a race where a write landing between `take_frame` and `ack_frame`
+  gets silently dropped by a bare "clear everything currently pending" ack; `restore_frame` only ever touches
+  what a specific `take_frame` call returned, so it has no such race and needed no new in-flight/checkpoint
+  state in `Store`. Full rationale was also handed to the worker-side agent via the session's coordination
+  file so `web/lattice.worker.js`'s `flushPending` can wire its catch block to call it.
+- **`consent_item_to_fact` now re-checks `Status::Accepted` and `!is_destroyed`** before building the `Fact`
+  (`not_found` otherwise). Time passes between `evaluate()` offering a `ConsentItem` and the person approving
+  it; a delete, reject, or compartment destroy in that window must not still let the stale offered value out.
+- **`release` no longer trusts its `facts` parameter.** It now calls `evaluate` again internally and keeps
+  only facts that still appear in the fresh `auto` set or match a fresh `ask` item (via
+  `consent_item_to_fact`, which is what makes the destroyed/deleted case above apply here too); anything else
+  — a revoked grant, a since-deleted node, or a fact that was never actually authorized at all — is dropped
+  rather than released and logged. This closes the gap where authorization lived entirely in not-yet-written
+  JS glue: the crate is now the one place that decides what a `release` call is allowed to actually disclose,
+  regardless of what a caller (buggy glue, or a compromised page calling `release` directly) passes in. The
+  *approval* half — which `ask` items the person actually consented to — still has to come from the caller,
+  since that's a one-time interactive choice nothing in the crate can re-derive; only the *authorization*
+  half (is this still something the current grant state allows right now) is re-checked.

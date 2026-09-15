@@ -25,10 +25,14 @@ const STORE_NAME = "keys";
 const ROOT_KEY_ID = "root";
 const OPFS_DIR = ["lattice", "v1"];
 
+const BACKUP_VERSION = 1;
+
 let wasmReady = false;
 let lattice = null; // the wasm `Lattice` instance, or null before/after open/close
 let rootKey = null; // non-extractable HKDF CryptoKey, or null while locked
+let cachedSchema = null; // schemaJson() is static per build; cached once so importBackup can validate compartment names even after close()
 const loadedCompartments = new Set();
+const lastPushedSeq = new Map(); // grantId -> highest seq already pushed via a standing update, this worker session only
 
 // --------------------------------------------------------------- plumbing
 
@@ -59,6 +63,25 @@ function requireRootKey() {
     throw { code: "locked", message: "no root key: call createRoot() or restoreRoot() first" };
   }
   return rootKey;
+}
+
+/**
+ * The static schema (compartments/types/links), cached once. Reused by
+ * `importBackup`'s validation (review #8) even when `lattice` is currently
+ * null (e.g. right after `close()`, which the backup-restore flow uses
+ * deliberately to force a genuine read-from-disk on the next `open()`): a
+ * throwaway `Lattice` is spun up only for this, since `schemaJson()` never
+ * depends on a store's contents, and wasm-bindgen's own finalizer reclaims
+ * it once GC'd even though nothing calls `.free()` on it explicitly.
+ */
+function requireSchema() {
+  if (cachedSchema) return cachedSchema;
+  if (!wasmReady) {
+    throw { code: "not_open", message: "call open() before this" };
+  }
+  const source = lattice ?? new Lattice();
+  cachedSchema = JSON.parse(source.schemaJson());
+  return cachedSchema;
 }
 
 /** Parse the JSON string `lattice.call(op, argsJson)` returns and throw its `error`, or return its `ok` value. */
@@ -187,16 +210,98 @@ async function deleteCompartmentFile(compartment) {
  * Encrypt and append every compartment the store has unflushed writes for.
  * Called after every mutating `call`, before replying, so a caller's
  * `await` means "on disk" (§5).
+ *
+ * `takeFrame` is destructive (review #3): if the encrypt+append for a
+ * compartment fails partway (OPFS quota, a `createSyncAccessHandle`
+ * conflict from an overlapping flush on the same compartment, ...), the
+ * plaintext is handed back to `restoreFrame(compartment, bytes)`, which
+ * re-queues it ahead of anything written since — never lost, and picked up
+ * by the next successful flush attempt for that compartment. The caller
+ * gets a typed `flush_failed` error rather than a silent success, so it
+ * knows the write it just made is not yet durable.
  */
 async function flushPending() {
   const pending = JSON.parse(lattice.pendingCompartments());
+  if (pending.length === 0) return;
+  // Fail fast, before any destructive takeFrame, if we can't possibly
+  // encrypt anything — nothing to restore because nothing was taken.
+  requireRootKey();
+
+  let flushedAny = false;
   for (const compartment of pending) {
     const plaintext = lattice.takeFrame(compartment);
     if (plaintext.length === 0) continue;
-    requireRootKey();
-    const key = await deriveCompartmentKey(subtleCrypto(), rootKey, compartment);
-    const frame = await encryptCompartmentFrame(subtleCrypto(), key, compartment, plaintext);
-    await appendToCompartmentFile(compartment, frame);
+    try {
+      const key = await deriveCompartmentKey(subtleCrypto(), rootKey, compartment);
+      const frame = await encryptCompartmentFrame(subtleCrypto(), key, compartment, plaintext);
+      await appendToCompartmentFile(compartment, frame);
+      flushedAny = true;
+    } catch (e) {
+      lattice.restoreFrame(compartment, plaintext);
+      throw {
+        code: "flush_failed",
+        message: `failed to flush compartment "${compartment}": ${e && e.message ? e.message : String(e)}`,
+      };
+    }
+  }
+
+  if (flushedAny) {
+    await pushStandingUpdates();
+  }
+}
+
+/**
+ * DESIGN.md §7: "The worker calls [standing_diff] after every flush and the
+ * app sends the push." This is the worker's half: for every non-revoked,
+ * non-expired standing grant, ask the store what changed since the last
+ * push and — if anything did — advance the watermark and tell the main
+ * thread via an unsolicited `{type: "standingUpdate"}` message (no request
+ * `id`; see web/lattice.js's `onStandingUpdate`). Sending the push itself is
+ * the app's job (salt-fe, phase 2) and is out of scope here.
+ *
+ * The watermark (`lastPushedSeq`) is in-memory only, for this worker
+ * session: there is no persisted "last pushed seq" record in phase 1, so a
+ * fresh session (page reload) starts every grant back at seq 0 and may
+ * re-announce facts it already pushed before the reload. That's a known
+ * phase-1 gap, not silently swallowed — flagged here rather than solved,
+ * since fixing it means a new persisted record type, which is
+ * crates/lattice-core's call, not this worker's.
+ *
+ * Best-effort: never throws. A standing-push failure must not fail the
+ * caller's own write, which already succeeded and is durable by the time
+ * this runs.
+ */
+async function pushStandingUpdates() {
+  if (!lattice) return;
+  try {
+    const grantsResult = JSON.parse(lattice.call("list_grants", "{}"));
+    if (grantsResult.error) return;
+    const grants = grantsResult.ok;
+    if (!grants || grants.length === 0) return;
+
+    const statsResult = JSON.parse(lattice.call("stats", "{}"));
+    const currentSeq = statsResult.ok ? statsResult.ok.seq : null;
+    const nowMs = Date.now();
+
+    for (const grant of grants) {
+      if (grant.revoked || !grant.standing) continue;
+      if (grant.standing.expires_at && grant.standing.expires_at < nowMs) continue;
+
+      const sinceSeq = lastPushedSeq.get(grant.id) ?? 0;
+      const diffResult = JSON.parse(
+        lattice.call("standing_diff", JSON.stringify({ grant_id: grant.id, since_seq: sinceSeq })),
+      );
+      if (diffResult.error) continue;
+      const facts = diffResult.ok;
+      if (!facts || facts.length === 0) continue;
+
+      if (currentSeq !== null) {
+        lastPushedSeq.set(grant.id, currentSeq);
+      }
+      self.postMessage({ type: "standingUpdate", grantId: grant.id, facts });
+    }
+  } catch {
+    // Best-effort — see doc comment above.
   }
 }
 
@@ -225,6 +330,7 @@ async function doOpen({ wasmUrl, compartments } = {}) {
   }
 
   const schema = JSON.parse(lattice.schemaJson());
+  cachedSchema = schema;
   const targets = compartments ?? schema.compartments;
 
   const timings = {};
@@ -298,14 +404,41 @@ async function doCreateRoot() {
   return { raw };
 }
 
-async function doRestoreRoot({ raw } = {}) {
+async function doRestoreRoot({ raw, force } = {}) {
   const bytes = toUint8Array(raw);
   if (bytes.length !== 32) {
     throw { code: "bad_request", message: "restoreRoot requires exactly 32 bytes" };
   }
+  // Mirror createRoot's guard (review #2): restoreRoot is documented as
+  // being for a genuinely key-less device. Overwriting an active root
+  // silently and irreversibly discards the current non-extractable key —
+  // there is no way to recover it — and if any writes are still unflushed
+  // at that moment, the next flush would encrypt them under the NEW root
+  // and append them to a file whose earlier frames are under the OLD root,
+  // producing a file that can never be fully decrypted with a single key.
+  const existing = rootKey ?? (await loadRootKeyFromIndexedDb());
+  if (existing && !force) {
+    throw {
+      code: "root_exists",
+      message: "a root key already exists; pass { force: true } to replace it (only for a genuinely key-less device)",
+    };
+  }
   const key = await importRootKey(subtleCrypto(), bytes);
   await storeRootKeyInIndexedDb(key);
   rootKey = key;
+  if (force) {
+    // Drop the wasm instance entirely so the caller must re-`open()`: a
+    // fresh Lattice has no pending writes that could otherwise get
+    // mis-encrypted under the new root on the next flush (see above).
+    // Whatever was unflushed under the old root is lost either way — it
+    // was never promised as durable (§5's "await means on disk" invariant
+    // only covers what actually reached a successful flush).
+    if (lattice) {
+      lattice.free();
+      lattice = null;
+    }
+    loadedCompartments.clear();
+  }
   return { restored: true };
 }
 
@@ -328,9 +461,17 @@ async function doDestroyCompartment({ compartment } = {}) {
   const lat = requireLattice();
   const resultJson = lat.call("destroy_compartment", JSON.stringify({ compartment }));
   const result = unwrapCallResult(resultJson);
+  // Persist the `system` DestroyCompartment marker BEFORE deleting the
+  // compartment's file (review #7). A crash between these two steps then
+  // leaves an inert leftover file that next `open()` still refuses to load
+  // (shielded by the now-durable marker), instead of the other order's
+  // failure mode: an unmarked file that a later `importBackup` of an older
+  // snapshot could resurrect as if it were never destroyed. If the flush
+  // itself fails, this throws (flush_failed) and the file is correctly
+  // left in place rather than deleted out from under an unpersisted marker.
+  await flushPending();
   await deleteCompartmentFile(compartment);
   loadedCompartments.delete(compartment);
-  await flushPending(); // the DestroyCompartment marker lands in `system`
   return result;
 }
 
@@ -345,7 +486,7 @@ async function doExportBackup() {
     }
   }
   const manifest = {
-    version: 1,
+    version: BACKUP_VERSION,
     exportedAt: Date.now(),
     files: files.map((f) => ({ name: f.name, size: f.bytes.length })),
   };
@@ -353,7 +494,26 @@ async function doExportBackup() {
 }
 
 async function doImportBackup({ blob } = {}) {
-  const { files } = decodeBackup(toUint8Array(blob));
+  // decodeBackup already validates byte-level structure (truncated/trailing
+  // data); this adds the semantic checks review #8 found missing:
+  // manifest version, and that every named file is a real compartment. Not
+  // a confidentiality issue either way (AEAD's AAD and the HKDF `info` are
+  // both bound to the true compartment name, so a mislabeled file just
+  // fails to decrypt later at open() rather than leaking anything) — this
+  // is about failing clearly and immediately instead of cryptically later.
+  const { manifest, files } = decodeBackup(toUint8Array(blob));
+  if (manifest.version !== BACKUP_VERSION) {
+    throw {
+      code: "invalid_backup",
+      message: `unsupported backup version ${manifest.version} (expected ${BACKUP_VERSION})`,
+    };
+  }
+  const validCompartments = new Set(requireSchema().compartments);
+  for (const file of files) {
+    if (!validCompartments.has(file.name)) {
+      throw { code: "invalid_backup", message: `backup names an unknown compartment "${file.name}"` };
+    }
+  }
   for (const file of files) {
     await writeWholeCompartmentFile(file.name, file.bytes);
   }

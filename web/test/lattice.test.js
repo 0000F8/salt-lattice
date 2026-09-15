@@ -101,9 +101,66 @@ describe("openLattice", () => {
       "decryptBlob",
       "stats",
     ]);
-    expect(seen.find((m) => m.op === "restoreRoot").args).toEqual({ raw: new Uint8Array(32) });
+    expect(seen.find((m) => m.op === "restoreRoot").args).toEqual({ raw: new Uint8Array(32), force: false });
     expect(seen.find((m) => m.op === "destroyCompartment").args).toEqual({ compartment: "health" });
     expect(seen.find((m) => m.op === "encryptBlob").args).toEqual({ purpose: "embedding", bytes: new Uint8Array([1]) });
+  });
+
+  it("restoreRoot passes force:true through when asked", async () => {
+    let seenArgs;
+    const worker = makeFakeWorker((msg, w) => {
+      seenArgs = msg.args;
+      w.onmessage({ data: { id: msg.id, ok: true, result: { restored: true } } });
+    });
+    const handle = await openLattice({ wasmUrl: WASM_URL, worker });
+    await handle.restoreRoot(new Uint8Array(32), { force: true });
+    expect(seenArgs).toEqual({ raw: new Uint8Array(32), force: true });
+  });
+
+  it("rejects restoreRoot with the worker's typed root_exists error", async () => {
+    const worker = makeFakeWorker((msg, w) => {
+      w.onmessage({
+        data: { id: msg.id, ok: false, error: { code: "root_exists", message: "a root key already exists" } },
+      });
+    });
+    const handle = await openLattice({ wasmUrl: WASM_URL, worker });
+    await expect(handle.restoreRoot(new Uint8Array(32))).rejects.toEqual({
+      code: "root_exists",
+      message: "a root key already exists",
+    });
+  });
+
+  it("routes an unsolicited standingUpdate message to onStandingUpdate listeners, not the request map", async () => {
+    let capturedOnMessage;
+    const worker = {
+      postMessage: vi.fn(),
+      set onmessage(fn) {
+        capturedOnMessage = fn;
+      },
+      onerror: null,
+      terminate: vi.fn(),
+    };
+    const handle = await openLattice({ wasmUrl: WASM_URL, worker });
+
+    const received = [];
+    const unsubscribe = handle.onStandingUpdate((update) => received.push(update));
+
+    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_1", facts: [{ path: "a" }] } });
+    expect(received).toEqual([{ grantId: "g_1", facts: [{ path: "a" }] }]);
+
+    unsubscribe();
+    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_2", facts: [] } });
+    expect(received).toHaveLength(1); // unsubscribed listener heard nothing further
+
+    // No stray request/response handling: a standingUpdate never touches
+    // in-flight requests (no `id`, so it must not resolve/reject anything).
+    const pending = handle.stats();
+    capturedOnMessage({ data: { id: 999, ok: true, result: "wrong-id-ignored" } });
+    capturedOnMessage({ data: { type: "standingUpdate", grantId: "g_3", facts: [{ path: "b" }] } });
+    expect(worker.postMessage).toHaveBeenCalled();
+    const lastCall = worker.postMessage.mock.calls.at(-1)[0];
+    capturedOnMessage({ data: { id: lastCall.id, ok: true, result: "stats-result" } });
+    await expect(pending).resolves.toBe("stats-result");
   });
 
   it("rejects every in-flight request on a worker error", async () => {

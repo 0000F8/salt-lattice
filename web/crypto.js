@@ -172,23 +172,61 @@ export function encodeBackup(manifest, files) {
   return concatBytes(parts);
 }
 
+/**
+ * Reverses `encodeBackup`, validating the byte layout is fully
+ * self-consistent (review #8's structural half — the worker adds the
+ * semantic checks, manifest version and known-compartment names, since
+ * those need the schema): every declared file block must actually be
+ * present at full length, and no bytes may be left over once every declared
+ * file has been read. A short manifest that undercounts its own files used
+ * to silently drop the trailing ones instead of failing import outright.
+ */
 export function decodeBackup(bytes) {
+  if (bytes.length < 4) {
+    throw new Error("lattice: backup is too short to contain a manifest");
+  }
   let offset = 0;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
   const manifestLen = view.getUint32(offset, true);
   offset += 4;
+  if (offset + manifestLen > bytes.length) {
+    throw new Error("lattice: truncated backup manifest");
+  }
   const manifestBytes = bytes.subarray(offset, offset + manifestLen);
   offset += manifestLen;
-  const manifest = JSON.parse(decoder.decode(manifestBytes));
+
+  let manifest;
+  try {
+    manifest = JSON.parse(decoder.decode(manifestBytes));
+  } catch (e) {
+    throw new Error(`lattice: backup manifest is not valid JSON: ${e.message}`);
+  }
+  if (typeof manifest !== "object" || manifest === null || !Array.isArray(manifest.files)) {
+    throw new Error("lattice: backup manifest has no files array");
+  }
 
   const files = [];
-  for (const entry of manifest.files ?? []) {
+  for (const entry of manifest.files) {
+    if (!entry || typeof entry.name !== "string" || entry.name.length === 0) {
+      throw new Error("lattice: backup manifest has a file entry with no name");
+    }
+    if (offset + 4 > bytes.length) {
+      throw new Error(`lattice: backup is missing the file block for "${entry.name}"`);
+    }
     const len = view.getUint32(offset, true);
     offset += 4;
+    if (offset + len > bytes.length) {
+      throw new Error(`lattice: backup's file block for "${entry.name}" is truncated`);
+    }
     const fileBytes = bytes.subarray(offset, offset + len);
     offset += len;
     files.push({ name: entry.name, bytes: fileBytes });
   }
+
+  if (offset !== bytes.length) {
+    throw new Error("lattice: backup has trailing bytes the manifest doesn't account for");
+  }
+
   return { manifest, files };
 }

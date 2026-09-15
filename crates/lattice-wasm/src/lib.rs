@@ -118,10 +118,26 @@ impl Lattice {
     /// The plaintext to encrypt and append to `compartment`'s file: every
     /// record written since the last `takeFrame` for it. Empty
     /// (zero-length) when nothing is pending — the worker should skip the
-    /// encrypt+append step rather than write an empty frame.
+    /// encrypt+append step rather than write an empty frame. Removes those
+    /// records from the pending queue immediately; if the encrypt+append
+    /// that follows throws, call `restoreFrame(compartment, bytes)` with
+    /// these exact bytes rather than losing them (`docs/DESIGN.md` "Decided
+    /// while building").
     #[wasm_bindgen(js_name = takeFrame)]
     pub fn take_frame(&mut self, compartment: &str) -> Vec<u8> {
         self.store.take_frame(compartment)
+    }
+
+    /// Recover a flush that failed after `takeFrame`: re-queue the exact
+    /// bytes `takeFrame(compartment)` just returned so the next `takeFrame`
+    /// for this compartment includes them again. Does not touch the
+    /// in-memory index (those records are already applied — only the "still
+    /// needs to reach disk" queue lost them).
+    #[wasm_bindgen(js_name = restoreFrame)]
+    pub fn restore_frame(&mut self, compartment: &str, bytes: &[u8]) -> Result<(), JsValue> {
+        self.store
+            .restore_frame(compartment, bytes)
+            .map_err(to_js_error)
     }
 
     /// JSON array of compartment names with anything unflushed. The worker
