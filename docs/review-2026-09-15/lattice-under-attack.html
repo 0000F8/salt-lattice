@@ -1,0 +1,771 @@
+<title>Lattice Under Attack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #F6F7FA; --panel: #FFFFFF; --panel-2: #EEF1F6;
+    --ink: #111827; --ink-2: #4B5563; --ink-3: #7C8594;
+    --line: #D6DBE4; --line-2: #E6E9EF;
+    --blue: #2563EB; --blue-ink: #1D4ED8; --blue-wash: #E8EFFD;
+    --crit: #B42318; --crit-wash: #FEE4E2;
+    --high: #B54708; --high-wash: #FEF0C7;
+    --med: #475467; --med-wash: #EAECF0;
+    --low: #98A2B3; --low-wash: #F2F4F7;
+    --good: #16794C; --good-wash: #E3F5EC;
+    --shadow: 0 1px 2px rgba(17,24,39,.06);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0C121D; --panel: #131B29; --panel-2: #1A2334;
+      --ink: #E7EBF2; --ink-2: #AEB7C6; --ink-3: #7B869A;
+      --line: #2B3547; --line-2: #222B3B;
+      --blue: #6D9BFF; --blue-ink: #8FB1FF; --blue-wash: #16264A;
+      --crit: #F97066; --crit-wash: #3B1512;
+      --high: #FDB022; --high-wash: #3A2A0A;
+      --med: #AEB7C6; --med-wash: #232B3A;
+      --low: #7B869A; --low-wash: #1A2130;
+      --good: #4FCB8A; --good-wash: #10281C;
+      --shadow: none; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0C121D; --panel: #131B29; --panel-2: #1A2334;
+    --ink: #E7EBF2; --ink-2: #AEB7C6; --ink-3: #7B869A;
+    --line: #2B3547; --line-2: #222B3B;
+    --blue: #6D9BFF; --blue-ink: #8FB1FF; --blue-wash: #16264A;
+    --crit: #F97066; --crit-wash: #3B1512;
+    --high: #FDB022; --high-wash: #3A2A0A;
+    --med: #AEB7C6; --med-wash: #232B3A;
+    --low: #7B869A; --low-wash: #1A2130;
+    --good: #4FCB8A; --good-wash: #10281C;
+    --shadow: none; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif; font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding-block: 40px 96px; padding-inline: 20px; }
+  .mono, code { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code { font-size: .86em; background: var(--panel-2); padding: .1em .35em; border-radius: 3px; }
+  a { color: var(--blue-ink); }
+  .eyebrow { font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 12px; }
+  h1 { font-size: clamp(34px, 5vw, 48px); font-weight: 600; letter-spacing: -.02em; line-height: 1.05; margin: 0 0 16px; text-wrap: balance; }
+  .lede { font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 64ch; margin: 0 0 28px; text-wrap: pretty; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 14px; margin-bottom: 36px; }
+  nav.toc a { color: var(--ink-2); text-decoration: none; }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--blue-ink); text-decoration: underline; }
+  section { margin: 0 0 64px; }
+  h2 { font-size: 26px; font-weight: 600; letter-spacing: -.015em; margin: 0 0 6px; text-wrap: balance; }
+  h3 { font-size: 18px; font-weight: 600; margin: 32px 0 6px; }
+  .sub { color: var(--ink-3); font-size: 14px; margin: 0 0 20px; }
+  p { max-width: 70ch; margin: 0 0 14px; text-wrap: pretty; }
+  ul, ol { max-width: 70ch; padding-left: 22px; margin: 0 0 14px; }
+  li { margin: 0 0 6px; }
+  li::marker { color: var(--ink-3); }
+
+  /* severity chips */
+  .sev { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 3px; white-space: nowrap; font-weight: 500; }
+  .sev-crit { color: var(--crit); background: var(--crit-wash); }
+  .sev-high { color: var(--high); background: var(--high-wash); }
+  .sev-med { color: var(--med); background: var(--med-wash); }
+  .sev-low { color: var(--low); background: var(--low-wash); }
+  .kind { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); border: 1px solid var(--line); padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+  .cost { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-2); }
+  .ver { display: inline-block; font-size: 11px; font-family: "IBM Plex Mono", monospace; color: var(--good); border: 1px solid var(--good); padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+  .ver-r { color: var(--ink-3); border-color: var(--line); }
+
+  /* summary strip */
+  .tally { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 0 0 36px; }
+  .tally div { background: var(--panel); padding: 14px 16px; }
+  .tally b { display: block; font-size: 26px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .tally span { font-size: 13px; color: var(--ink-3); }
+  .tally .c b { color: var(--crit); } .tally .h b { color: var(--high); } .tally .m b { color: var(--med); } .tally .l b { color: var(--low); }
+
+  .verdict { border-left: 3px solid var(--crit); background: var(--panel); padding: 16px 20px; border-radius: 0 4px 4px 0; margin: 0 0 24px; max-width: 80ch; box-shadow: var(--shadow); }
+  .verdict p { margin: 0 0 10px; max-width: none; }
+  .verdict p:last-child { margin: 0; }
+
+  /* figure */
+  figure { margin: 22px 0 26px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 18px 18px 12px; box-shadow: var(--shadow); }
+  figure svg { display: block; width: 100%; height: auto; max-width: 100%; color: var(--ink); font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif; }
+  figure .scroll { overflow-x: auto; }
+  figure .scroll svg { min-width: 720px; }
+  figcaption { font-size: 13.5px; color: var(--ink-2); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line-2); max-width: 80ch; }
+  .fig-num { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
+  svg .box { fill: var(--panel); stroke: currentColor; stroke-width: 1.2; }
+  svg .box-soft { fill: var(--panel-2); stroke: var(--line); stroke-width: 1; }
+  svg .t { fill: currentColor; font-size: 12.5px; }
+  svg .t-b { fill: currentColor; font-size: 13px; font-weight: 600; }
+  svg .t-s { fill: var(--ink-3); font-size: 11px; }
+  svg .t-n { fill: currentColor; font-size: 22px; font-weight: 600; }
+  svg .t-crit { fill: var(--crit); font-size: 11.5px; font-weight: 500; }
+  svg .ln { stroke: currentColor; stroke-width: 1.2; fill: none; }
+  svg .bar-c { fill: var(--crit); } svg .bar-h { fill: var(--high); } svg .bar-m { fill: var(--med); } svg .bar-l { fill: var(--low); }
+
+  /* kill list */
+  .kill { list-style: none; padding: 0; margin: 18px 0 0; max-width: none; display: grid; gap: 12px; }
+  .kill li { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--crit); border-radius: 4px; padding: 14px 18px; margin: 0; box-shadow: var(--shadow); }
+  .kill .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 6px; }
+  .kill .head b { font-size: 17px; font-weight: 600; }
+  .kill .num { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--crit); }
+  .kill p { margin: 0 0 6px; max-width: 90ch; font-size: 15px; }
+  .kill .fix { color: var(--ink-2); }
+  .kill .fix strong { color: var(--ink); }
+  .kill .src { font-size: 12.5px; color: var(--ink-3); font-family: "IBM Plex Mono", monospace; }
+
+  /* findings tables */
+  .tbl-wrap { overflow-x: auto; margin: 12px 0 8px; }
+  table.f { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+  table.f th, table.f td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line-2); }
+  table.f th { font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; background: var(--panel-2); }
+  table.f tr:last-child td { border-bottom: none; }
+  table.f td.id { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-3); width: 36px; white-space: nowrap; }
+  table.f td.what { width: 46%; }
+  table.f td.what b { display: block; font-weight: 600; margin-bottom: 2px; }
+  table.f td.what span { color: var(--ink-2); font-size: 13.5px; }
+  table.f td.fix { width: 32%; font-size: 13.5px; color: var(--ink-2); }
+  table.f td.sv { white-space: nowrap; }
+  .lens-verdict { font-size: 15px; color: var(--ink-2); max-width: 80ch; margin: 0 0 8px; }
+  .lens-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; margin: 28px 0 4px; }
+  .lens-head h3 { margin: 0; }
+  .lens-head .counts { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-3); }
+
+  /* stupid ideas grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; margin: 16px 0 0; padding: 0; list-style: none; max-width: none; }
+  .grid li { background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; padding: 12px 14px; margin: 0; font-size: 14.5px; }
+  .grid li b { display: block; font-weight: 600; margin-bottom: 4px; }
+  .grid li .from { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); display: block; margin-top: 6px; }
+
+  /* disputes */
+  .dispute { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); margin: 12px 0; }
+  .dispute .row { display: grid; grid-template-columns: 90px 1fr; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line-2); font-size: 14.5px; }
+  .dispute .row:last-child { border-bottom: none; }
+  .dispute .k { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-3); padding-top: 3px; }
+  @media (max-width: 520px) { .dispute .row { grid-template-columns: 1fr; gap: 4px; } }
+
+  /* first moves */
+  .moves { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; padding: 0; margin: 16px 0 0; list-style: none; max-width: none; }
+  .moves li { background: var(--panel); border: 1px solid var(--line-2); border-top: 3px solid var(--blue); border-radius: 4px; padding: 12px 14px; margin: 0; font-size: 14.5px; }
+  .moves li .lens { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); display: block; margin-bottom: 4px; }
+  .moves li b { display: block; margin-bottom: 4px; }
+
+  /* plan */
+  .plan { list-style: none; padding: 0; margin: 12px 0 0; max-width: none; }
+  .plan li { display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--line-2); font-size: 14.5px; }
+  .plan li:last-child { border-bottom: none; }
+  .plan .n { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-3); }
+  .plan .ref { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+  .plan-title { font-size: 16px; font-weight: 600; margin: 26px 0 2px; }
+  .plan-sub { font-size: 13.5px; color: var(--ink-3); margin: 0 0 6px; }
+  .good { border-left: 3px solid var(--good); background: var(--good-wash); padding: 12px 16px; border-radius: 0 4px 4px 0; max-width: 80ch; }
+  .good ul { margin: 0; }
+  .foot { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3); max-width: none; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">Salt · Lattice · adversarial review · six lenses · 2026-09-15</p>
+  <h1>Lattice Under Attack</h1>
+  <p class="lede">Six contrarian reviewers (architecture, security, implementation, cryptography, datastore, agentic) were told to assume Lattice is wrong until the code proved otherwise. They read the crate, the worker, the web-app glue, the API and the agent SDK on the <span class="mono">lattice</span> branches, and came back with 49 findings. This page is the synthesis: what would kill it, what each lens found, which accepted risks they dispute, where they disagree, the identity and many-devices questions the owner raised, and an ordered fix plan.</p>
+
+  <nav class="toc" aria-label="Sections">
+    <a href="#verdict">Verdict</a>
+    <a href="#map">Where it breaks</a>
+    <a href="#kill">Eight that would kill it</a>
+    <a href="#lenses">Lens by lens</a>
+    <a href="#stupid">Stupid ideas</a>
+    <a href="#identity">Identity is not one thing</a>
+    <a href="#devices">Many devices</a>
+    <a href="#disputed">Disputed accepted risks</a>
+    <a href="#disagree">Where they disagree</a>
+    <a href="#plan">Fix plan</a>
+    <a href="#shape">Is this the right shape?</a>
+  </nav>
+
+  <div class="tally" aria-label="Finding counts by severity">
+    <div><b>49</b><span>findings, six lenses</span></div>
+    <div class="c"><b>11</b><span>critical</span></div>
+    <div class="h"><b>17</b><span>high</span></div>
+    <div class="m"><b>17</b><span>medium</span></div>
+    <div class="l"><b>4</b><span>low</span></div>
+    <div><b>3</b><span>criticals re-verified by the lead in the code</span></div>
+  </div>
+
+  <!-- ===== VERDICT ===== -->
+  <section id="verdict">
+    <h2>Verdict</h2>
+    <p class="sub">Synthesised from six independent verdicts. Where they agreed, it is stated flatly.</p>
+    <div class="verdict">
+      <p><strong>The crate is the strongest part and the least important part.</strong> Every lens conceded that the Rust core's access rules hold under direct reading: deny by default, byte-identical denial, re-authorisation at release time, rotated-key refusal. Every lens also found that the decisions feeding that core are made in JavaScript glue with none of the crate's test discipline, and that is where three of the eleven criticals live.</p>
+      <p><strong>Two of the criticals are not attacks, they are the product not working.</strong> Standing pushes deliver zero facts while logging success and acknowledging the checkpoint. And there is no way for a person to type a fact into their own Lattice: the only writers are agents proposing what they already know and an on-device model measured at 2.9% recall. The consent machinery currently guards an empty graph.</p>
+      <p><strong>The single-device assumption was never designed, only assumed.</strong> Two tabs or two devices compute the same next sequence number and one silently drops the other's writes. The backup restores the key but not the data. Storage eviction has no recovery state. "The person's phone" is a mental model, not an invariant.</p>
+      <p><strong>Destroy does not destroy.</strong> Compartment keys are derived, so deleting a file leaves a key that still opens any older backup. Compaction cannot be reached from JavaScript at all, so every file grows forever, and the only performance number was measured against a one-frame file that production can never produce.</p>
+    </div>
+  </section>
+
+  <!-- ===== MAP ===== -->
+  <section id="map">
+    <h2>Where it breaks</h2>
+    <p class="sub">All 49 findings placed on the layer they attack. Critical count in red.</p>
+    <figure>
+      <div class="scroll">
+      <svg viewBox="0 0 960 300" role="img" aria-label="Seven layers from agent SDK to product premise with finding counts: SDK 2, wire protocol 5, server trust 4, web-app glue 10, worker 6, crate 13, product and gates 9. Criticals: SDK 1, glue 3, worker 2, crate 2, product 3.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+        </defs>
+        <!-- request path arrow -->
+        <line x1="20" y1="60" x2="940" y2="60" class="ln" marker-end="url(#ar)"/>
+        <text x="20" y="48" class="t-s">a request's path, agent to store</text>
+        <text x="940" y="48" text-anchor="end" class="t-s">what the product rests on</text>
+
+        <!-- layer boxes: x, w -->
+        <!-- 1 SDK -->
+        <rect x="20" y="80" width="118" height="120" rx="4" class="box"/>
+        <text x="79" y="102" text-anchor="middle" class="t-b">Agent SDK</text>
+        <text x="79" y="118" text-anchor="middle" class="t-s">lattice.ts, actions.ts</text>
+        <text x="79" y="160" text-anchor="middle" class="t-n">2</text>
+        <text x="79" y="184" text-anchor="middle" class="t-crit">1 critical</text>
+        <!-- 2 wire -->
+        <rect x="150" y="80" width="118" height="120" rx="4" class="box"/>
+        <text x="209" y="102" text-anchor="middle" class="t-b">Wire protocol</text>
+        <text x="209" y="118" text-anchor="middle" class="t-s">markers, sizes, timing</text>
+        <text x="209" y="160" text-anchor="middle" class="t-n">5</text>
+        <text x="209" y="184" text-anchor="middle" class="t-s">0 critical</text>
+        <!-- 3 server -->
+        <rect x="280" y="80" width="118" height="120" rx="4" class="box"/>
+        <text x="339" y="102" text-anchor="middle" class="t-b">Server trust</text>
+        <text x="339" y="118" text-anchor="middle" class="t-s">identity, backup row</text>
+        <text x="339" y="160" text-anchor="middle" class="t-n">4</text>
+        <text x="339" y="184" text-anchor="middle" class="t-s">0 critical</text>
+        <!-- 4 glue -->
+        <rect x="410" y="80" width="118" height="120" rx="4" class="box" style="stroke: var(--crit); stroke-width: 2"/>
+        <text x="469" y="102" text-anchor="middle" class="t-b">Web-app glue</text>
+        <text x="469" y="118" text-anchor="middle" class="t-s">requestHandler, sync,</text>
+        <text x="469" y="131" text-anchor="middle" class="t-s">consent sheet</text>
+        <text x="469" y="160" text-anchor="middle" class="t-n">10</text>
+        <text x="469" y="184" text-anchor="middle" class="t-crit">3 critical</text>
+        <!-- 5 worker -->
+        <rect x="540" y="80" width="118" height="120" rx="4" class="box"/>
+        <text x="599" y="102" text-anchor="middle" class="t-b">Worker</text>
+        <text x="599" y="118" text-anchor="middle" class="t-s">keys, frames, OPFS</text>
+        <text x="599" y="160" text-anchor="middle" class="t-n">6</text>
+        <text x="599" y="184" text-anchor="middle" class="t-crit">2 critical</text>
+        <!-- 6 crate -->
+        <rect x="670" y="80" width="118" height="120" rx="4" class="box"/>
+        <text x="729" y="102" text-anchor="middle" class="t-b">Crate</text>
+        <text x="729" y="118" text-anchor="middle" class="t-s">store, query, access</text>
+        <text x="729" y="160" text-anchor="middle" class="t-n">13</text>
+        <text x="729" y="184" text-anchor="middle" class="t-crit">2 critical</text>
+        <!-- 7 product -->
+        <rect x="800" y="80" width="140" height="120" rx="4" class="box" style="stroke: var(--crit); stroke-width: 2"/>
+        <text x="870" y="102" text-anchor="middle" class="t-b">Product and gates</text>
+        <text x="870" y="118" text-anchor="middle" class="t-s">premise, fixture, schema</text>
+        <text x="870" y="160" text-anchor="middle" class="t-n">9</text>
+        <text x="870" y="184" text-anchor="middle" class="t-crit">3 critical</text>
+
+        <!-- severity bars per layer (crit/high/med/low), 6px per finding -->
+        <g transform="translate(0,214)">
+          <!-- SDK: 1c 0h 0m 1l -->
+          <rect x="20" y="0" width="6" height="10" class="bar-c"/><rect x="27" y="0" width="6" height="10" class="bar-l"/>
+          <!-- wire: 0c 2h 3m 0l -->
+          <rect x="150" y="0" width="13" height="10" class="bar-h"/><rect x="164" y="0" width="20" height="10" class="bar-m"/>
+          <!-- server: 0c 2h 2m -->
+          <rect x="280" y="0" width="13" height="10" class="bar-h"/><rect x="294" y="0" width="13" height="10" class="bar-m"/>
+          <!-- glue: 3c 5h 1m 1l -->
+          <rect x="410" y="0" width="20" height="10" class="bar-c"/><rect x="431" y="0" width="34" height="10" class="bar-h"/><rect x="466" y="0" width="6" height="10" class="bar-m"/><rect x="473" y="0" width="6" height="10" class="bar-l"/>
+          <!-- worker: 2c 2h 1m 1l -->
+          <rect x="540" y="0" width="13" height="10" class="bar-c"/><rect x="554" y="0" width="13" height="10" class="bar-h"/><rect x="568" y="0" width="6" height="10" class="bar-m"/><rect x="575" y="0" width="6" height="10" class="bar-l"/>
+          <!-- crate: 2c 4h 7m -->
+          <rect x="670" y="0" width="13" height="10" class="bar-c"/><rect x="684" y="0" width="27" height="10" class="bar-h"/><rect x="712" y="0" width="48" height="10" class="bar-m"/>
+          <!-- product: 3c 4h 1m 1l -->
+          <rect x="800" y="0" width="20" height="10" class="bar-c"/><rect x="821" y="0" width="27" height="10" class="bar-h"/><rect x="849" y="0" width="6" height="10" class="bar-m"/><rect x="856" y="0" width="6" height="10" class="bar-l"/>
+        </g>
+        <!-- legend -->
+        <rect x="20" y="256" width="10" height="10" class="bar-c"/><text x="36" y="265" class="t-s">critical</text>
+        <rect x="90" y="256" width="10" height="10" class="bar-h"/><text x="106" y="265" class="t-s">high</text>
+        <rect x="146" y="256" width="10" height="10" class="bar-m"/><text x="162" y="265" class="t-s">medium</text>
+        <rect x="218" y="256" width="10" height="10" class="bar-l"/><text x="234" y="265" class="t-s">low</text>
+        <text x="940" y="265" text-anchor="end" class="t-s">crate: 42 Rust tests, four prior review rounds. glue: the fewest tests, the most criticals.</text>
+      </svg>
+      </div>
+      <figcaption><span class="fig-num">Fig. 1</span>The crate collects the most findings but they are growth and indexing problems. The criticals cluster in the web-app glue that decides what reaches the crate, and in the product premise: nothing fills the graph, and the one performance gate measures a store shape production never produces.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== KILL LIST ===== -->
+  <section id="kill">
+    <h2>Eight that would kill it</h2>
+    <p class="sub">The criticals, merged across lenses where two reviewers hit the same thing. "Confirmed" means the lead re-read the code and reproduced the reasoning; "reviewer-cited" means the reviewer's file and line references stand on their own.</p>
+    <ol class="kill">
+      <li>
+        <div class="head"><span class="num">K1</span><b>Standing pushes deliver nothing and log success</b><span class="sev sev-crit">critical</span><span class="ver">confirmed</span></div>
+        <p><code>evaluate</code> gates every field on the request's <code>asks</code>. A standing push builds its request with <code>asks: []</code>, so the fresh evaluation inside <code>release</code> returns no allowed facts, every real fact from <code>standing_diff</code> is filtered out, an empty release is sent, and the checkpoint is acknowledged anyway. The disclosure log shows an entry with no fields. No test exercises the standing kind of release.</p>
+        <p class="fix"><strong>Fix:</strong> a standing-aware path in <code>release</code> that re-checks against the grant's auto selectors instead of the request's asks, plus one test with <code>DisclosureKind::Standing</code>. Ack only when the sent facts match. <span class="cost">Cost S</span></p>
+        <p class="src">security F1 · access.rs:127-175, 238-296 · requestHandler.js:316-326</p>
+      </li>
+      <li>
+        <div class="head"><span class="num">K2</span><b>Nothing fills the graph</b><span class="sev sev-crit">critical</span><span class="ver">confirmed</span></div>
+        <p>The only caller of <code>put_node</code> in the web app is the agent and Ion proposal path. There is no form to add a fact as yourself. Ion measures 2.9% exact recall and 63% schema-invalid output. An agent can only propose what it already knows, which is the thing the grant flow exists to avoid needing. A new account's Lattice stays empty, so every guarantee below protects nothing.</p>
+        <p class="fix"><strong>Fix:</strong> an "Add to your data" form on the Your data page driven by the schema the picker already fetches, writing with <code>author: {kind: "you"}</code>. No crate change. <span class="cost">Cost S</span></p>
+        <p class="src">architecture F1 · agentic F7 · LatticePage.jsx · requestHandler.js:230 · salt-ion BASELINE.md</p>
+      </li>
+      <li>
+        <div class="head"><span class="num">K3</span><b>Two tabs silently drop each other's writes</b><span class="sev sev-crit">critical</span><span class="ver ver-r">reviewer-cited</span></div>
+        <p>Each worker derives <code>next_seq</code> from what it loaded. Two sessions open on the same files compute the same number, both append a record at that seq, and on the next open <code>apply_record</code> treats the second as already applied and discards it. No locks, no broadcast channel, no mention of tabs anywhere in the docs. The first write from each session collides, deterministically.</p>
+        <p class="fix"><strong>Fix:</strong> a Web Locks lock per compartment before any flush; a second context refuses <code>open</code> or downgrades to read-only. A merge protocol is out of scope, detect-and-refuse is not. <span class="cost">Cost M</span></p>
+        <p class="src">implementation F1 · store.rs:159-166, 237-240 · lattice.worker.js:201-221</p>
+      </li>
+      <li>
+        <div class="head"><span class="num">K4</span><b>Destroy does not destroy the key</b><span class="sev sev-crit">critical</span><span class="ver ver-r">reviewer-cited</span></div>
+        <p>A compartment key is a pure function of the root key and the compartment name. Destroying deletes the file and writes a marker, and the marker lives in the <em>current</em> device's system compartment. Any older backup blob still decrypts under the same derived key, and <code>importBackup</code> writes the old ciphertext straight back with no destroyed check. A person's explicit destroy is reversible forever by anyone holding an old blob, the server included.</p>
+        <p class="fix"><strong>Fix:</strong> a random key per compartment, wrapped by today's derived key; destroy deletes the wrap. Already named as the phase 2 option; it stops being optional once backup rows exist, which is at first use. <span class="cost">Cost M</span></p>
+        <p class="src">cryptography F1 · crypto.js:135-137 · lattice.worker.js:574-590, 615-644</p>
+      </li>
+      <li>
+        <div class="head"><span class="num">K5</span><b>Compaction is unreachable and the perf gate measured a file that cannot exist</b><span class="sev sev-crit">critical</span><span class="ver">confirmed</span></div>
+        <p><code>Store::compact</code> exists in Rust and is bound to nothing: not on the wasm class, not in the worker, not in the op dispatcher. Every write, accept, checkpoint and log entry appends a frame forever. The 5,000-node gate was built by one batched call, producing one frame per compartment; real use flushes after every call, producing thousands of frames each needing its own OPFS read and WebCrypto decrypt. The wall-clock number that would show this is recorded but never gated.</p>
+        <p class="fix"><strong>Fix:</strong> bind <code>compact</code>, run it past a frame-count threshold (after K3, since a whole-file rewrite with a second tab open is the worst case). Rebuild the fixture from thousands of single writes and gate <code>wallMs</code>. <span class="cost">Cost S + M</span></p>
+        <p class="src">datastore F1, F2 · implementation F5 · architecture F2 · lattice-wasm lib.rs:86-158 · fixtures.rs:44-68 · perf.spec.js:37</p>
+      </li>
+      <li>
+        <div class="head"><span class="num">K6</span><b>Trusted writes and delegation both bypass the whole pipeline</b><span class="sev sev-crit">critical</span><span class="ver ver-r">reviewer-cited</span></div>
+        <p>An agent with <code>trusted_writes</code> on a compartment lands facts as accepted with no review, up to 2,000 characters of free text per field. A different agent with an auto grant on that compartment later receives that text masked as <code>author: agent</code>, indistinguishable from any other fact, and reads it into its model context as the person's own data. Separately, an agent that legitimately received a fact can paste it into a free-text <code>delegate_to_agent</code> task to an agent with no grant at all: no consent, no log entry, no revocation. The grant system governs the first hop only.</p>
+        <p class="fix"><strong>Fix:</strong> trust is per writer, not per fact: a trusted-write node stays ineligible for release to any grant but the writer's own until reviewed once. Show <code>author.kind</code> on every node. Scan delegation tasks for values received via <code>request_personal_data</code> in the same process and refuse or at least log a forwarded event. <span class="cost">Cost M</span></p>
+        <p class="src">agentic F2, F3 · security F5 · store.rs:342-359 · actions.ts:266, 321 · PersonalDataCard.jsx:155-165</p>
+      </li>
+      <li>
+        <div class="head"><span class="num">K7</span><b>A request that arrives before the store is open is dropped forever</b><span class="sev sev-crit">critical</span><span class="ver ver-r">reviewer-cited</span></div>
+        <p>The incoming-message subscription is gated on "logged in", not on "Lattice ready". A request landing during reconnect, before the vault unlocks and <code>open</code> resolves, throws <code>not_open</code>, is logged to the console and never replayed. The SDK meanwhile tells the agent "you'll get a message when they next open Salt", a promise this path cannot keep. One arriving after open but before grant sync gets the byte-identical deny, which the person cannot tell from a revoked grant.</p>
+        <p class="fix"><strong>Fix:</strong> buffer inbound Lattice markers while <code>status !== "ready"</code> and replay them keyed by message id once bootstrap finishes. <span class="cost">Cost S</span></p>
+        <p class="src">agentic F1 · implementation F4 · LatticeRequestHandler.jsx:41-127 · lattice.worker.js:61, 101 · actions.ts:374-380</p>
+      </li>
+      <li>
+        <div class="head"><span class="num">K8</span><b>Grant sync races itself and swallows the failure</b><span class="sev sev-crit">critical</span><span class="ver ver-r">reviewer-cited</span></div>
+        <p><code>syncGrants</code> fires every agent's <code>set_grant</code> through <code>Promise.all</code>. All touch the system compartment; the worker's message handler is async and unserialised; each flush opens an exclusive OPFS sync access handle. With two or more grants the second flush throws, <code>restoreFrame</code> correctly re-queues the bytes, and then the caller catches the rejection with a bare empty handler. The grant sits unflushed until some unrelated call happens to touch the compartment. Nobody sees anything. And <code>close</code> on logout frees the store without flushing first, so re-queued data can be lost outright.</p>
+        <p class="fix"><strong>Fix:</strong> a sequential loop instead of <code>Promise.all</code>; surface <code>flush_failed</code>; make <code>close</code> await a best-effort flush and guard <code>restoreFrame</code> against a freed store. <span class="cost">Cost S</span></p>
+        <p class="src">implementation F2, F3 · sync.js:36-54 · lattice.worker.js:273-301, 499-507, 716-724 · client.js:76-93</p>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ===== LENSES ===== -->
+  <section id="lenses">
+    <h2>Lens by lens</h2>
+    <p class="sub">Each reviewer's own verdict, then every finding as a row. Full reports with quoted evidence are in the swarm directory named at the foot of the page.</p>
+
+    <div class="lens-head"><h3>Architecture</h3><span class="counts">8 findings · 2 critical · 4 high · 2 medium</span></div>
+    <p class="lens-verdict">"A fortress with nothing in it." The access state machine is well built and re-derives authorisation at every step, but no code path lets a person enter a fact, and the parts that decide what reaches the crate live in untested glue. Reads as a security-engineering exercise that got ahead of the product question of whether a closed, versioned, Rust graph was the right shape for some facts about one person.</p>
+    <div class="tbl-wrap"><table class="f">
+      <thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>Kind</th><th>Fix</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td class="id">A1</td><td class="what"><b>No way to put a fact in except a 2.9%-recall model or an agent that already knows it</b><span>Only put_node caller is the proposal path. The consent machinery has nothing to consent to.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">premise</span></td><td class="fix">"Add to your data" form off the exported schema.</td><td class="cost">S</td></tr>
+        <tr><td class="id">A2</td><td class="what"><b>Compaction called nowhere; every version replays on every open</b><span>Open time is O(total records ever written), and the gate measured current nodes only.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Call compact on a cadence from the worker.</td><td class="cost">S</td></tr>
+        <tr><td class="id">A3</td><td class="what"><b>A second device gets an empty graph it cannot tell from "withheld"</b><span>Backup restores the key, not the data. R5's own indistinguishability hides the divergence from the person.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">premise</span></td><td class="fix">Wire data restore; "no backup restored yet" as its own UI state.</td><td class="cost">M</td></tr>
+        <tr><td class="id">A4</td><td class="what"><b>One schema field is a three-repo release train</b><span>Rust table → wasm rebuild → sync into salt-fe and salt-api. Unknown types are dropped with no trace; the dropped count is never surfaced.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">stupid-idea</span></td><td class="fix">One free-text escape-hatch type per compartment so an unknown fact lands pending instead of vanishing.</td><td class="cost">M</td></tr>
+        <tr><td class="id">A5</td><td class="what"><b>The rigor is inverted</b><span>channel is hardcoded "private" before the crate sees it; identity comes from a REST call the crate cannot verify. 42 tests prove properties of a model fed by the least-scrutinised code.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">caveat</span></td><td class="fix">Hold isGroupChat and fetchAgentFingerprint to numbered, tested rules; exercise R6 through the real handler.</td><td class="cost">S/M</td></tr>
+        <tr><td class="id">A6</td><td class="what"><b>Rust, wasm and OPFS for a ~30-type graph one person can fill</b><span>5,000 flat records prefix-matched in plain JS is sub-millisecond; the gate proves wasm clears a bar JS would clear with far less toolchain.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">premise</span></td><td class="fix">Accept for phase 1; weigh further crate investment against it.</td><td class="cost">—</td></tr>
+        <tr><td class="id">A7</td><td class="what"><b>persist() is best-effort and eviction has no recovery state</b><span>Key present with files evicted looks like a fresh empty "ready".</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">caveat</span></td><td class="fix">Detect key-but-empty and route to restore.</td><td class="cost">M</td></tr>
+        <tr><td class="id">A8</td><td class="what"><b>Every group-chat request creates a permanent sidechain</b><span>One question in a 20-person group leaves a listed private lane per member, indistinguishable from an advisor relationship.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Tag Lattice-originated lanes so the UI can collapse them.</td><td class="cost">S</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="lens-head"><h3>Security</h3><span class="counts">8 findings · 1 critical · 2 high · 4 medium · 1 low</span></div>
+    <p class="lens-verdict">The crate has survived four rounds and it shows. The glue has a release-blocking bug (standing pushes no-op while claiming success) and one trust boundary the docs understate: the whole agent identity chain is server-asserted, and Salt messages are encrypted but never signed, so no stronger client-side fix exists yet. The consent sheet renders agent-controlled text as Salt's own copy, the exact anti-pattern the project forbids for money UI.</p>
+    <div class="tbl-wrap"><table class="f">
+      <thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>Kind</th><th>Fix</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td class="id">S1</td><td class="what"><b>Standing pushes silently deliver zero facts and mark themselves successful</b><span>See K1. Confirmed by the lead.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Standing-aware release path; a test with the standing kind.</td><td class="cost">S</td></tr>
+        <tr><td class="id">S2</td><td class="what"><b>Consent sheet renders the agent's purpose as trusted copy</b><span>"@agent asks for: {purpose}" with no quoting, no length cap, no bidi stripping; the same string lands in the log forever. "Tap Share to confirm you're not a bot" reads as Salt speaking.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">premise</span></td><td class="fix">Visually quote purpose like ProvenanceStrip; cap ~280 chars; strip control characters.</td><td class="cost">S</td></tr>
+        <tr><td class="id">S3</td><td class="what"><b>Agent identity is 100% server-asserted and nothing in Salt can do better</b><span>decrypt is called with no verificationKeys anywhere. A1's "stronger version" does not exist without message signing.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">premise</span></td><td class="fix">Reword RISKS.md now; signing is a roadmap item, not a Lattice fix.</td><td class="cost">L</td></tr>
+        <tr><td class="id">S4</td><td class="what"><b>Byte-identical hides content, not timing</b><span>A no-match reply leaves in milliseconds; an ask-gated match waits for a human. An agent can binary-search compartment contents by latency.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">caveat</span></td><td class="fix">Immediate ack release with the auto subset, then the consent result later.</td><td class="cost">M</td></tr>
+        <tr><td class="id">S5</td><td class="what"><b>trusted_writes is a blind write with no owner-visible audit</b><span>Your data never shows author.kind on accepted nodes; a trusted write looks like your own entry forever.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">stupid-idea</span></td><td class="fix">Show author on every node; an "agent-written" filter.</td><td class="cost">S</td></tr>
+        <tr><td class="id">S6</td><td class="what"><b>No rate limit anywhere on Lattice requests</b><span>Only the blanket per-IP throttle applies. An auto grant polled on a loop is live telemetry.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Per-(person, agent) daily budget counted at release from the log; refuse with the R5-shaped empty payload.</td><td class="cost">M</td></tr>
+        <tr><td class="id">S7</td><td class="what"><b>No replay protection for standing releases in the SDK</b><span>Every unmatched release goes straight to onLatticeRelease; no check on release id or since_seq.</span></td><td class="sv"><span class="sev sev-low">low</span></td><td><span class="kind">caveat</span></td><td class="fix">Track (chatId, release.id) like the delivery-id dedup elsewhere.</td><td class="cost">S</td></tr>
+        <tr><td class="id">S8</td><td class="what"><b>Backup restore trusts whatever the server returns</b><span>lastKnownVersion is a module variable reset on reload; a rootless device restores unconditionally. CAS gates writes, not reads.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">caveat</span></td><td class="fix">Anchor the watermark where the person's other open devices can hold it, in the same commit as A3's counter.</td><td class="cost">M</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="lens-head"><h3>Implementation</h3><span class="counts">8 findings · 2 critical · 2 high · 3 medium · 1 low</span></div>
+    <p class="lens-verdict">Every failure path within one call is well engineered. The concurrency model around those calls was never designed, only the single-caller happy path. A burst is guaranteed by the app's own grant sync, and two tabs drop writes on the first concurrent session. The earlier adversarial review never touched concurrency: a blind spot in the prior review, not just the code.</p>
+    <div class="tbl-wrap"><table class="f">
+      <thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>Kind</th><th>Fix</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td class="id">I1</td><td class="what"><b>Two tabs or devices silently and permanently drop each other's writes</b><span>See K3.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">stupid-idea</span></td><td class="fix">Web Locks per compartment; refuse or read-only for a second context.</td><td class="cost">M</td></tr>
+        <tr><td class="id">I2</td><td class="what"><b>syncGrants' own Promise.all guarantees the OPFS burst race</b><span>See K8. The loser's flush_failed is caught by an empty handler.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Sequential loop; stop swallowing flush_failed.</td><td class="cost">S</td></tr>
+        <tr><td class="id">I3</td><td class="what"><b>close() frees the store without flushing, fire-and-forget on logout</b><span>Re-queued data from an earlier failure is discarded; restoreFrame can throw a raw TypeError on a null store inside the very catch that would have reported it.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Await a best-effort flush in doClose; guard restoreFrame.</td><td class="cost">S</td></tr>
+        <tr><td class="id">I4</td><td class="what"><b>No readiness gate on incoming requests</b><span>See K7. Two effects off the same flag with no ordering, despite the file's own comment insisting on it.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Gate dispatch on status ready; queue.</td><td class="cost">S</td></tr>
+        <tr><td class="id">I5</td><td class="what"><b>compact exists, is correct, and is dead code</b><span>Not a case in the op dispatcher; only reachable from a Rust test.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Opportunistic compaction after N flushes, after I1.</td><td class="cost">M</td></tr>
+        <tr><td class="id">I6</td><td class="what"><b>Unbounded, fully serialised query results, untested past 5,000</b><span>resolveProposalParent queries with no limit on every agent proposal; three copies of every node cross the boundary.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Explicit small limit; a 50,000-node gate for query and search.</td><td class="cost">S/M</td></tr>
+        <tr><td class="id">I7</td><td class="what"><b>No capability check for OPFS sync access handles</b><span>Four bare call sites. Below the floor the person sees a raw engine error, not "not available in this browser". The iOS floor is asserted, not measured.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">caveat</span></td><td class="fix">One probe before the first open; a plain unsupported state.</td><td class="cost">S</td></tr>
+        <tr><td class="id">I8</td><td class="what"><b>The vendor drop has no drift protection across repos</b><span>Byte-identical today; nothing fails when someone forgets sync-to-fe.</span></td><td class="sv"><span class="sev sev-low">low</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Write a VENDORED_FROM stamp; a test asserts it exists.</td><td class="cost">S</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="lens-head"><h3>Cryptography</h3><span class="counts">7 findings · 1 critical · 2 high · 2 medium · 2 low</span></div>
+    <p class="lens-verdict">Not a rolled-your-own report: the primitives are right and wired right. But the frame format has no integrity story across frames or across time, so anyone who can touch a file or an old blob can delete, freeze or resurrect data undetected. And R5's byte-identical guarantee dies the moment the payload becomes an unpadded OpenPGP message.</p>
+    <div class="tbl-wrap"><table class="f">
+      <thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>Kind</th><th>Fix</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td class="id">C1</td><td class="what"><b>Destroying a compartment does not destroy its key</b><span>See K4.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">premise</span></td><td class="fix">Random key per compartment, wrapped; destroy deletes the wrap.</td><td class="cost">M</td></tr>
+        <tr><td class="id">C2</td><td class="what"><b>No cross-frame binding: frame deletion is undetectable</b><span>AAD is the same string for every frame; open re-sorts by embedded seq, and seq is store-global so gaps are normal. Only a trailing partial frame is guarded.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">caveat</span></td><td class="fix">Per-compartment frame index in the AAD; persist the high-water mark in IndexedDB; refuse an open below it.</td><td class="cost">M</td></tr>
+        <tr><td class="id">C3</td><td class="what"><b>A3's manifest counter fails on the one device backups exist for</b><span>A wiped or new phone has no "highest seen" to compare against.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">premise</span></td><td class="fix">Embed the destroy-marker list in the encrypted manifest; refuse to resurrect on a live device. Write down that the wiped-device case has no defence.</td><td class="cost">S</td></tr>
+        <tr><td class="id">C4</td><td class="what"><b>Byte-identical release does not survive being sent</b><span>The release body's length is proportional to the fact count, then encrypted with no padding. The server distinguishes 0 from 12 facts by ciphertext size.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">premise</span></td><td class="fix">Pad to size buckets with the padBlock pattern the backup manifest already uses.</td><td class="cost">S</td></tr>
+        <tr><td class="id">C5</td><td class="what"><b>The fingerprint check has zero independent legs</b><span>The server supplies both the claimed identity and the "proof" its key matches.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">caveat</span></td><td class="fix">Use the sender key already in the chat payload (but see the disagreement below: still server-supplied).</td><td class="cost">S</td></tr>
+        <tr><td class="id">C6</td><td class="what"><b>deriveBlobKey's purpose string is caller-supplied and unvalidated</b><span>Latent footgun, not exploitable today.</span></td><td class="sv"><span class="sev sev-low">low</span></td><td><span class="kind">bottleneck</span></td><td class="fix">A const allowlist in the worker.</td><td class="cost">S</td></tr>
+        <tr><td class="id">C7</td><td class="what"><b>Root-key wrap vs password change: fine by construction, untested</b><span>The messages DEK is stable across a password change; nothing asserts it.</span></td><td class="sv"><span class="sev sev-low">low</span></td><td><span class="kind">caveat</span></td><td class="fix">One regression test.</td><td class="cost">S</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="lens-head"><h3>Datastore</h3><span class="counts">10 findings · 2 critical · 4 high · 4 medium</span></div>
+    <p class="lens-verdict">A hand-rolled append-only log wearing a graph database's clothes: evaluate, standing_diff and search full-scan every accepted node on every call, and nobody can shrink the files even by hand. None of it is fatal at a few thousand facts, but the only credibility number was produced by a fixture that will never occur in production.</p>
+    <div class="tbl-wrap"><table class="f">
+      <thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>Kind</th><th>Fix</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td class="id">D1</td><td class="what"><b>Compaction exists in Rust and is unreachable from JS</b><span>See K5. Confirmed by the lead.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Bind it; run past a frame threshold.</td><td class="cost">S+M</td></tr>
+        <tr><td class="id">D2</td><td class="what"><b>The perf gate benchmarks a fixture that cannot occur</b><span>One batched call → one frame per compartment. Real use: one frame per write, one awaited decrypt per frame. wallMs is never gated.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">stupid-idea</span></td><td class="fix">Fixture of thousands of single calls; gate wallMs.</td><td class="cost">M</td></tr>
+        <tr><td class="id">D3</td><td class="what"><b>The fixture understates per-node cost</b><span>Top-level types, required fields only; parent lookup untested at scale; real records 2–5× the bytes.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">caveat</span></td><td class="fix">Populate every field; note the gap in GATES.md.</td><td class="cost">S</td></tr>
+        <tr><td class="id">D4</td><td class="what"><b>evaluate, standing_diff and search are full scans on every call</b><span>A grant scoped to one field walks the whole graph, on every flush via standing pushes.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">bottleneck</span></td><td class="fix">A (compartment, type) → ids index; a seq-sorted structure for diffs.</td><td class="cost">M</td></tr>
+        <tr><td class="id">D5</td><td class="what"><b>traverse is depth × frontier × total links</b><span>No adjacency index; every level rescans all links.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">bottleneck</span></td><td class="fix">node → links adjacency map maintained on put/delete.</td><td class="cost">M</td></tr>
+        <tr><td class="id">D6</td><td class="what"><b>No dedup: the same proposal lands N pending nodes forever</b><span>put_node never looks up an existing node; Ion re-extracting "likes Japanese" from 40 chats makes 40 nodes.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">caveat</span></td><td class="fix">Existence lookup by type, name and parent before an agent or Ion write; edit instead of create.</td><td class="cost">M</td></tr>
+        <tr><td class="id">D7</td><td class="what"><b>No uniqueness: two roots, two "Japanese"</b><span>Exact-name queries return both; the parent resolver picks whichever sorts first.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">caveat</span></td><td class="fix">Singleton identity.person; D6 covers the rest.</td><td class="cost">S</td></tr>
+        <tr><td class="id">D8</td><td class="what"><b>Delete never touches children; edit never re-checks the parent</b><span>Orphaned cuisine nodes stay accepted, queryable and releasable.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">caveat</span></td><td class="fix">Cascade, or require the parent be accepted in validate_parent.</td><td class="cost">S/M</td></tr>
+        <tr><td class="id">D9</td><td class="what"><b>SCHEMA_VERSION with no migration path</b><span>Rename a type and old nodes vanish from query and evaluate while search keeps surfacing them. The schema changed three times while unshipped.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">premise</span></td><td class="fix">Stamp records with the version written; additive-only policy.</td><td class="cost">M</td></tr>
+        <tr><td class="id">D10</td><td class="what"><b>Edits store the full field set; the disclosure log has no index</b><span>A 5,000-entry log pays a full clone-and-reverse on every page.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">caveat</span></td><td class="fix">A per-agent side index for the log; leave delta storage alone.</td><td class="cost">S/L</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="lens-head"><h3>Agentic</h3><span class="counts">8 findings · 3 critical · 3 high · 2 medium</span></div>
+    <p class="lens-verdict">Engineered like a security product, deployed like a chat feature, and the two personas it serves get the worse half of the trade. The person gets an empty graph and an all-or-nothing consent sheet; the agent developer gets a protocol that can swallow a request forever and a Fact too thin to correct. The two structural bypasses work exactly as designed on the honest path, which is worse than anything on the accepted-risk list.</p>
+    <div class="tbl-wrap"><table class="f">
+      <thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>Kind</th><th>Fix</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td class="id">G1</td><td class="what"><b>A request before the vault unlocks is answered by an exception, then never again</b><span>See K7.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Buffer and replay by message id.</td><td class="cost">S</td></tr>
+        <tr><td class="id">G2</td><td class="what"><b>Delegation is a plaintext bypass of the whole pipeline</b><span>See K6. Every hop after the first is prose.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">premise</span></td><td class="fix">Non-forwardable marker enforced in the SDK; at least a forwarded-fact event.</td><td class="cost">M</td></tr>
+        <tr><td class="id">G3</td><td class="what"><b>trusted_writes lets attacker-controlled text become "the person's own data" for another agent</b><span>See K6. Plus the purpose line as a social-engineering vector.</span></td><td class="sv"><span class="sev sev-crit">critical</span></td><td><span class="kind">stupid-idea</span></td><td class="fix">Review before cross-agent release; lower the cap for agent text; chrome around purpose.</td><td class="cost">M</td></tr>
+        <tr><td class="id">G4</td><td class="what"><b>Fact has no id, so an agent can only pile up duplicates</b><span>Severity changed mild → severe becomes a second allergy node; path collides on shared names.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">caveat</span></td><td class="fix">A scoped id in facts for agents that proposed the node; a supersedes field on proposals.</td><td class="cost">M</td></tr>
+        <tr><td class="id">G5</td><td class="what"><b>The closed schema refuses exactly what real tasks need</b><span>A booking agent needs a passport number; the workaround is plain chat, with no signal that this ask fell outside protection.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">premise</span></td><td class="fix">Keep the boundary; one passive line when an ask names a type that does not exist.</td><td class="cost">S</td></tr>
+        <tr><td class="id">G6</td><td class="what"><b>All-or-nothing consent predicts convergence to blanket Auto</b><span>One ask selector holds every mixed request; nothing shows how often it fires; standing is one global toggle per grant.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Release auto now, ask later; "asked N times this month" per selector.</td><td class="cost">M</td></tr>
+        <tr><td class="id">G7</td><td class="what"><b>No manual entry: the graph a grant protects is empty for almost everyone</b><span>See K2. Confirmed by two search shapes.</span></td><td class="sv"><span class="sev sev-high">high</span></td><td><span class="kind">bottleneck</span></td><td class="fix">Minimal entry form; highest leverage, lowest cost in the review.</td><td class="cost">S</td></tr>
+        <tr><td class="id">G8</td><td class="what"><b>Standing pushes are a 90-day unattended channel</b><span>Only expiry is notified; nothing prompts anyone to open the log.</span></td><td class="sv"><span class="sev sev-med">medium</span></td><td><span class="kind">caveat</span></td><td class="fix">A local "N updates sent this week" counter on the grant row.</td><td class="cost">S</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ===== STUPID IDEAS ===== -->
+  <section id="stupid">
+    <h2>Stupid ideas</h2>
+    <p class="sub">Things that are not bugs. They are choices the reviewers think were wrong, or right for the wrong reason.</p>
+    <ul class="grid">
+      <li><b>Benchmarking a file production can never produce</b>One batched call, one frame per compartment, required fields only, wall time never gated. The number is real and says nothing about a phone after a year.<span class="from">datastore D2, D3 · architecture A2</span></li>
+      <li><b>A closed schema that takes three repos to change one field</b>Ion's whole job is extracting open-ended facts against a taxonomy that needs a Rust edit, a wasm rebuild and two syncs to grow. Anything outside it vanishes silently.<span class="from">architecture A4 · datastore D9 · agentic G5</span></li>
+      <li><b>Trusted writes that skip the human</b>The one path where an agent's raw text becomes "your record" with nobody in the loop, and it composes with delegation.<span class="from">agentic G3 · security S5</span></li>
+      <li><b>A privacy property proven at the wrong layer</b>Byte-identical denial holds inside the crate, then leaves as an unpadded message whose length is the fact count, at a latency that says whether a human is being asked.<span class="from">cryptography C4 · security S4</span></li>
+      <li><b>A rollback counter stored in the thing being rolled back</b>"Refuse below the highest the device has seen" on a device that has seen nothing, which is the device that restores.<span class="from">cryptography C3 · security S8</span></li>
+      <li><b>Deleting a pointer and calling it destruction</b>Derived keys mean the key that opens a destroyed compartment still exists and always will.<span class="from">cryptography C1</span></li>
+      <li><b>Rust, wasm and a three-browser matrix for thirty types</b>The perf gate proves wasm clears a bar plain JS over IndexedDB would clear; the size gate is the one argument for it over SQLite, and it is a real one.<span class="from">architecture A6 · datastore (dissenting)</span></li>
+      <li><b>Promise.all against one exclusive file</b>The app's own grant sync manufactures the burst the worker was never designed for, then hides the loser's failure.<span class="from">implementation I2</span></li>
+    </ul>
+  </section>
+
+
+  <!-- ===== IDENTITY ===== -->
+  <section id="identity">
+    <h2>Identity is not one thing</h2>
+    <p class="sub">Raised by the owner mid-review. Checked against the schema, the access rules and the grant picker.</p>
+    <p>A person is several people: the one their employer's scheduling agent meets, the one a dating app's agent meets, the one their partner's agent meets. Lattice has one axis, the topic (identity, health, preferences…), and no axis for the audience. There is no field, type, rule or grant shape that says "this fact exists, and this class of agent must never learn it". The words sexuality, orientation, religion, politics, gender, audience, persona and sensitive appear nowhere in the schema, the design or the access code.</p>
+    <p>That produces three concrete leaks, none of which need an attacker.</p>
+    <ul>
+      <li><strong>The picker grants by topic, and topics are wide.</strong> The Personal data card offers <code>preferences.*</code> and <code>preferences.food.*</code>, never a field. A restaurant agent granted <code>preferences.*</code> on auto receives every fact anyone ever filed under preferences, including whatever Ion or a partner's agent proposed there about intimacy, and receives it in a standing push the moment it changes.</li>
+      <li><strong>What has no type does not get refused, it gets smuggled.</strong> The closed schema has no place for a kink, an orientation or a faith, so an extractor puts it where it fits: a <code>note</code> on <code>preferences.*</code>, a <code>relationships.person.detail</code> value, a <code>health.condition</code>. Free-text fields are the least governed thing in the store and they are released under any selector that matches the parent type.</li>
+      <li><strong>The root node is one self.</strong> <code>identity.person</code> carries one name and one <code>pronouns</code> field. Released under <code>identity.*</code> to any agent, it can out someone to an audience they present differently to. There is no "as strangers know me" and "as friends know me".</li>
+    </ul>
+
+    <figure>
+      <div class="scroll">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Left: today, one preferences.* grant to a restaurant agent releases food, music and an intimacy note alike. Right: proposed, each fact carries an audience tier and each grant an audience ceiling, so the same grant releases food only, an ask for music, and never the intimacy note.">
+        <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <!-- left -->
+        <rect x="10" y="10" width="460" height="310" rx="6" style="fill:none;stroke:var(--line);stroke-dasharray:5 4"/>
+        <text x="26" y="34" class="t-b">Today: one axis, the topic</text>
+        <text x="26" y="50" class="t-s">grant = preferences.* · mode auto</text>
+        <rect x="26" y="70" width="200" height="46" rx="4" class="box-soft"/>
+        <text x="126" y="89" text-anchor="middle" class="t">preferences.food.cuisine</text>
+        <text x="126" y="105" text-anchor="middle" class="t-s">Japanese · strength 0.8</text>
+        <rect x="26" y="126" width="200" height="46" rx="4" class="box-soft"/>
+        <text x="126" y="145" text-anchor="middle" class="t">preferences.music.artist</text>
+        <text x="126" y="161" text-anchor="middle" class="t-s">a band</text>
+        <rect x="26" y="182" width="200" height="46" rx="4" class="box-soft" style="stroke:var(--crit)"/>
+        <text x="126" y="201" text-anchor="middle" class="t">preferences.food.note</text>
+        <text x="126" y="217" text-anchor="middle" class="t-crit">an intimacy detail Ion filed here</text>
+        <rect x="320" y="118" width="130" height="60" rx="4" class="box"/>
+        <text x="385" y="143" text-anchor="middle" class="t-b">Restaurant agent</text>
+        <text x="385" y="160" text-anchor="middle" class="t-s">a stranger's bot</text>
+        <line x1="226" y1="93" x2="320" y2="138" class="ln" marker-end="url(#ar2)"/>
+        <line x1="226" y1="149" x2="320" y2="149" class="ln" marker-end="url(#ar2)"/>
+        <line x1="226" y1="205" x2="320" y2="160" class="ln" marker-end="url(#ar2)" style="stroke:var(--crit);stroke-width:1.8"/>
+        <text x="238" y="250" class="t-s">all three released, and re-pushed on every change</text>
+        <text x="26" y="290" class="t-s">A topic grant cannot say "food, yes; what I am like in bed, never".</text>
+        <text x="26" y="306" class="t-s">The picker has no field-level rule, and the schema has no tier.</text>
+
+        <!-- right -->
+        <rect x="490" y="10" width="460" height="310" rx="6" style="fill:none;stroke:var(--blue);stroke-width:1.2"/>
+        <text x="506" y="34" class="t-b">Proposed: a second axis, the audience</text>
+        <text x="506" y="50" class="t-s">grant = preferences.* · auto · ceiling: public</text>
+        <rect x="506" y="70" width="200" height="46" rx="4" class="box-soft"/>
+        <text x="606" y="89" text-anchor="middle" class="t">preferences.food.cuisine</text>
+        <text x="606" y="105" text-anchor="middle" class="t-s">tier: public</text>
+        <rect x="506" y="126" width="200" height="46" rx="4" class="box-soft"/>
+        <text x="606" y="145" text-anchor="middle" class="t">preferences.music.artist</text>
+        <text x="606" y="161" text-anchor="middle" class="t-s">tier: contacts</text>
+        <rect x="506" y="182" width="200" height="46" rx="4" class="box-soft" style="stroke:var(--crit)"/>
+        <text x="606" y="201" text-anchor="middle" class="t">intimacy.* · own compartment</text>
+        <text x="606" y="217" text-anchor="middle" class="t-crit">never · ask-only · no standing</text>
+        <rect x="800" y="118" width="130" height="60" rx="4" class="box"/>
+        <text x="865" y="143" text-anchor="middle" class="t-b">Restaurant agent</text>
+        <text x="865" y="160" text-anchor="middle" class="t-s">ceiling: public</text>
+        <line x1="706" y1="93" x2="800" y2="138" class="ln" marker-end="url(#ar2)"/>
+        <text x="750" y="108" text-anchor="middle" class="t-s">released</text>
+        <line x1="706" y1="149" x2="800" y2="149" class="ln" marker-end="url(#ar2)" style="stroke-dasharray:4 3"/>
+        <text x="753" y="143" text-anchor="middle" class="t-s">ask, every time</text>
+        <line x1="706" y1="205" x2="746" y2="205" class="ln" style="stroke:var(--crit)"/>
+        <text x="752" y="209" class="t-crit">never leaves; not even "absent"</text>
+        <text x="506" y="250" class="t-s">A fact's tier defaults from where it came from: a 1:1 with a partner</text>
+        <text x="506" y="264" class="t-s">is private, a public room is public. The ceiling caps what any</text>
+        <text x="506" y="278" class="t-s">topic grant can reach; a deeper tier needs its own named rule.</text>
+        <text x="506" y="306" class="t-s">Personas (Work, Friends, Dating) are named ceilings a grant is issued under.</text>
+      </svg>
+      </div>
+      <figcaption><span class="fig-num">Fig. 2</span>Topic and audience are independent. Today a grant on a topic reaches every tier inside it. With a tier on each fact and a ceiling on each grant, the same topic grant to a stranger's agent stops at public, asks for contacts-only facts, and never sees the private tier, whose absence is byte-identical to any other absence.</figcaption>
+    </figure>
+
+    <h3>What to change</h3>
+    <ul>
+      <li><strong>A tier on every fact</strong> (<code>public</code>, <code>contacts</code>, <code>private</code>, <code>never</code>), stored on the node, defaulting from the compartment and from the provenance of the chat it was extracted from. Ion and agent proposals carry the tier of their source chat; a fact from a lane with someone marked partner defaults to private.</li>
+      <li><strong>A ceiling on every grant</strong>, defaulting to public for an agent the person has never dealt with, which the crate enforces inside <code>evaluate</code> beside the selector match so the guarantee is a rule with a test, not glue.</li>
+      <li><strong>Sensitive compartments that cannot be auto.</strong> Sexuality and intimacy, religion, politics, immigration status, mental health: their own compartments, ask-only, excluded from standing pushes, excluded from the compartment-level checkbox so a wide grant can never include them by accident.</li>
+      <li><strong>Free text takes the strictest tier of its node's compartment</strong>, because a note is where anything without a type ends up.</li>
+      <li><strong>More than one self.</strong> <code>identity.person</code> gains per-tier presentation: the name and pronouns a stranger's agent gets can differ from what a friend's agent gets. A persona is a named ceiling, so "grant this agent as Work" is one tap that means public plus the work compartment.</li>
+      <li><strong>Provenance on facts, not just authorship.</strong> R7 masks who wrote a fact; nothing records what kind of room it was learned in. Keep the mask on release, keep the origin on the node, and let the tier default follow it.</li>
+    </ul>
+    <p>The cost is one column on the node, one field on the grant, one check in the crate and a picker that shows tiers. Without it the privacy story is "we cannot read your facts, but any agent you let near a topic can", which is not the story the product tells.</p>
+  </section>
+
+
+  <!-- ===== DEVICES ===== -->
+  <section id="devices">
+    <h2>Many devices</h2>
+    <p class="sub">Owner: "I have a browser, an iPhone and an iPad on the same account. Is this solved at the Salt level?" Checked against the API, the web app and the Lattice worker.</p>
+    <p><strong>For everything except Lattice, yes, and by one pattern.</strong> The server stores only ciphertext and every device derives the same keys from the login password. The PGP private key sits on the server encrypted under the messages key, so a new device unwraps it after sign-in. Every chat message is encrypted for every member, the sender included, so a new device reads the whole history. Wallet secrets are the same shape. Realtime goes to one Action Cable stream per user, so every connected device hears every event. Push subscriptions are per device. Nothing a device needs is only on that device.</p>
+    <p><strong>Lattice breaks the pattern in three places.</strong> The files are in the browser's private file system, the root key is in that browser's IndexedDB, and the sequence counter is derived from whatever that browser loaded. The backup row restores the key but not the data. So a second device opens an empty graph, two devices collide on the first write, and an evicted cache is indistinguishable from an empty account. One more thing this question exposes that no lens caught: an agent's request reaches every open device at once through the cable, so today every device would evaluate it, every device would show the consent sheet, and every device would send its own release.</p>
+    <p>On iOS, Safari and the home-screen app keep separate storage, so "my iPhone" is already two devices for anything kept on the device.</p>
+
+    <h3>The fix: put Lattice's log where Salt already solves this</h3>
+    <p>Salt is an end-to-end encrypted, server-sequenced, append-only log delivery system. That is what a chat is. Lattice's store is an append-only log of encrypted frames. Stop keeping it on the device and send the frames through the same machinery messages use: the server stores and orders ciphertext it cannot read, every device pulls, the device's files become a cache.</p>
+
+    <figure>
+      <div class="scroll">
+      <svg viewBox="0 0 960 360" role="img" aria-label="Left, today: each device has its own files, key and counter; a backup row holds one blob; devices diverge. Right, proposed: each device posts encrypted frames to a server table that assigns a per-user sequence and broadcasts on the user's cable stream; every device pulls since its last sequence; the device's files are a cache; the server holds ciphertext it cannot read.">
+        <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <!-- LEFT -->
+        <rect x="10" y="10" width="440" height="340" rx="6" style="fill:none;stroke:var(--line);stroke-dasharray:5 4"/>
+        <text x="26" y="34" class="t-b">Today: the device is the store</text>
+        <rect x="26" y="60" width="120" height="78" rx="4" class="box"/>
+        <text x="86" y="80" text-anchor="middle" class="t-b">iPhone</text>
+        <text x="86" y="97" text-anchor="middle" class="t-s">OPFS files · root key</text>
+        <text x="86" y="112" text-anchor="middle" class="t-s">next_seq = 41</text>
+        <text x="86" y="128" text-anchor="middle" class="t-s">graph: 300 facts</text>
+        <rect x="170" y="60" width="120" height="78" rx="4" class="box"/>
+        <text x="230" y="80" text-anchor="middle" class="t-b">iPad</text>
+        <text x="230" y="97" text-anchor="middle" class="t-s">OPFS files · own root</text>
+        <text x="230" y="112" text-anchor="middle" class="t-s">next_seq = 41</text>
+        <text x="230" y="128" text-anchor="middle" class="t-crit">graph: empty</text>
+        <rect x="314" y="60" width="120" height="78" rx="4" class="box"/>
+        <text x="374" y="80" text-anchor="middle" class="t-b">Browser</text>
+        <text x="374" y="97" text-anchor="middle" class="t-s">second tab</text>
+        <text x="374" y="112" text-anchor="middle" class="t-s">next_seq = 41</text>
+        <text x="374" y="128" text-anchor="middle" class="t-crit">write at 41 dropped</text>
+        <rect x="130" y="190" width="200" height="56" rx="4" class="box-soft" style="stroke-dasharray:4 3"/>
+        <text x="230" y="211" text-anchor="middle" class="t-b">lattice_backups</text>
+        <text x="230" y="228" text-anchor="middle" class="t-s">one blob, one key_wrap, version CAS</text>
+        <line x1="86" y1="138" x2="180" y2="190" class="ln" marker-end="url(#ar3)"/>
+        <text x="110" y="172" class="t-s">whole blob, debounced</text>
+        <line x1="230" y1="190" x2="230" y2="138" class="ln-dim" marker-end="url(#ar3)" style="stroke:var(--ink-3);stroke-dasharray:4 3"/>
+        <text x="238" y="168" class="t-s">key only; data import not wired</text>
+        <text x="26" y="282" class="t-s">Three devices, three stores, one counter value, no order between them.</text>
+        <text x="26" y="298" class="t-s">An agent's request reaches all three; all three answer.</text>
+        <text x="26" y="326" class="t-crit">Second device: empty. Second tab: silent loss. Eviction: looks empty.</text>
+
+        <!-- RIGHT -->
+        <rect x="470" y="10" width="480" height="340" rx="6" style="fill:none;stroke:var(--blue);stroke-width:1.2"/>
+        <text x="486" y="34" class="t-b">Proposed: the server sequences ciphertext, like messages</text>
+        <rect x="486" y="60" width="110" height="70" rx="4" class="box"/>
+        <text x="541" y="80" text-anchor="middle" class="t-b">iPhone</text>
+        <text x="541" y="97" text-anchor="middle" class="t-s">cache · last_seq 118</text>
+        <text x="541" y="112" text-anchor="middle" class="t-s">device_id d1</text>
+        <rect x="610" y="60" width="110" height="70" rx="4" class="box"/>
+        <text x="665" y="80" text-anchor="middle" class="t-b">iPad</text>
+        <text x="665" y="97" text-anchor="middle" class="t-s">cache · last_seq 118</text>
+        <text x="665" y="112" text-anchor="middle" class="t-s">device_id d2</text>
+        <rect x="734" y="60" width="110" height="70" rx="4" class="box"/>
+        <text x="789" y="80" text-anchor="middle" class="t-b">Browser</text>
+        <text x="789" y="97" text-anchor="middle" class="t-s">cache · last_seq 104</text>
+        <text x="789" y="112" text-anchor="middle" class="t-s">device_id d3</text>
+        <rect x="560" y="196" width="300" height="70" rx="4" class="box-soft" style="stroke:var(--blue)"/>
+        <text x="710" y="216" text-anchor="middle" class="t-b">lattice_frames</text>
+        <text x="710" y="232" text-anchor="middle" class="t-s">user · seq (server-assigned, monotonic) · compartment</text>
+        <text x="710" y="247" text-anchor="middle" class="t-s">device_id · blob (AES-GCM, key the server never has)</text>
+        <text x="710" y="261" text-anchor="middle" class="t-s">key_wrap stays on its row · frames are the backup</text>
+        <!-- post -->
+        <line x1="541" y1="130" x2="600" y2="196" class="ln" marker-end="url(#ar3)" style="stroke:var(--blue);stroke-width:1.6"/>
+        <text x="486" y="176" class="t-s">POST frame → seq 119</text>
+        <!-- broadcast -->
+        <line x1="665" y1="196" x2="665" y2="130" class="ln" marker-end="url(#ar3)"/>
+        <text x="672" y="166" class="t-s">cable: lattice_frame 119</text>
+        <!-- pull -->
+        <line x1="820" y1="196" x2="789" y2="130" class="ln" marker-end="url(#ar3)"/>
+        <text x="806" y="176" class="t-s">GET since=104</text>
+        <text x="486" y="296" class="t-s">One order for everyone. Two devices editing one node yield two kept versions;</text>
+        <text x="486" y="311" class="t-s">the server's seq says which is current. No merge protocol: every write is already a version.</text>
+        <text x="486" y="336" class="t-s">A new device: unwrap the root key with the messages key, pull since 0, ready.</text>
+      </svg>
+      </div>
+      <figcaption><span class="fig-num">Fig. 3</span>Today each device is its own store and the backup is a whole-blob afterthought. Proposed: frames go to the server, which assigns the order without being able to read them, and every device pulls. This is exactly how a chat message already reaches the iPhone, the iPad and the browser.</figcaption>
+    </figure>
+
+    <h3>What changes, by layer</h3>
+    <ul>
+      <li><strong>API, small.</strong> A <code>lattice_frames</code> table (user, server-assigned per-user <code>seq</code>, compartment, device id, ciphertext blob). <code>POST /api/v1/lattice/frames</code> assigns the seq and broadcasts a content-free <code>lattice_frame</code> event on the user's cable stream. <code>GET /api/v1/lattice/frames?since=</code> returns frames in order. A <code>compact</code> call accepts a snapshot frame for a compartment and drops that compartment's earlier frames, which the server can do without reading any of them. The backup row keeps only <code>key_wrap</code>. This is the messages pattern with the chat removed.</li>
+      <li><strong>Crate, medium.</strong> Records get a ULID identity instead of a local counter, and order comes from the server seq of the frame that carried them. The store already sorts and rebuilds its index at open; a pull does the same. A local write applies optimistically and is re-sorted when its frame's seq arrives. <code>next_seq</code> goes away, and with it the collision.</li>
+      <li><strong>Worker, medium.</strong> Durability moves from "on disk" to "acknowledged by the server". OPFS becomes a cache written lazily, which also removes the exclusive-handle race from grant sync. Open is: load the cache, pull since <code>last_seq</code>, then ready. The resume signal that already re-fetches chats triggers a pull.</li>
+      <li><strong>Web app, small.</strong> No new pages. The "not restored yet" state disappears because there is nothing to restore; an evicted cache is a slower open, not an empty account.</li>
+      <li><strong>Requests on several devices.</strong> The reply is a chat message, so every device sees the release arrive and dismisses its own consent sheet. For auto releases, a content-free claim endpoint (<code>POST /api/v1/lattice/claims</code> with a hash of the request id, first caller wins) elects one device to answer. Standing pushes already write a checkpoint record; with checkpoints synced, a device pulls before it pushes and only pushes above the highest checkpoint it has seen, and the SDK's release-id dedup catches the rare overlap.</li>
+    </ul>
+
+    <h3>What it costs in trust, honestly</h3>
+    <ul>
+      <li><strong>The server learns nothing new in kind.</strong> It already holds the whole blob, the key wrap and every message. It now holds the same bytes as many frames, and it sees when each compartment was written, which is the same class of metadata it has for chats. Pad frames to size buckets so it cannot count facts.</li>
+      <li><strong>The server becomes the sequencer.</strong> That is already true for messages: it can withhold or delay, it cannot forge, because a frame is authenticated under a key it does not have. A device whose <code>last_seq</code> is above what the server returns detects a rollback; a wiped device still cannot. That is the accepted risk from A3, now stated for what it is.</li>
+      <li><strong>Destroy still needs per-compartment keys</strong> (K4). Server-side frames make an old blob more available, not less, so the key wrap must be the thing that dies.</li>
+    </ul>
+
+    <h3>What it retires from this review</h3>
+    <p>K3 (sequence collision), A3 (second device empty), A7 (eviction), most of K5 (compaction via snapshot frames), and the exclusive-handle half of K8. It does not touch K1, K2, K6, K7, identity tiers, or the crypto integrity findings. The rejected alternatives: frames as messages to yourself (works, reuses everything, pollutes the chat list and the messages table), a CRDT (every write is already a version, so there is nothing to merge), and keeping the device primary with a three-way backup merge (needs vector clocks and still has no live sync).</p>
+  </section>
+
+  <!-- ===== DISPUTED RISKS ===== -->
+  <section id="disputed">
+    <h2>Disputed accepted risks</h2>
+    <p class="sub">docs/RISKS.md accepts six items from the earlier review. Four of them drew objections.</p>
+    <div class="dispute">
+      <div class="row"><span class="k">A1</span><div><strong>Understated.</strong> The doc offers a "stronger version" (derive the fingerprint from the sender's key in the chat payload). Security verified Salt never signs messages and the chat payload's keys also come from the server, so no stronger client-side fix exists without message signing. Say so plainly rather than implying one is waiting to be implemented.</div></div>
+      <div class="row"><span class="k">A3</span><div><strong>The proposed fix does not cover the case backups exist for.</strong> A manifest counter refused "below the highest the device has seen" refuses nothing on a wiped or new phone. Close the common case (a live device un-destroying a compartment) with a tombstone list in the encrypted manifest, and write down that first-restore-onto-a-wiped-device has no rollback defence in this architecture.</div></div>
+      <div class="row"><span class="k">A5</span><div><strong>Not one dead rule, a structural inversion.</strong> Every security-relevant classification (channel, identity, key freshness) is resolved once in plain JS and handed to Rust as ground truth. The 42-test suite proves properties of a model whose inputs are the least-tested code in the stack.</div></div>
+      <div class="row"><span class="k">A6</span><div><strong>Accepted without a bound.</strong> Continuous auto harvesting is accepted, but nothing limits its frequency at all, and the consent UX predicts everyone converging to auto. A per-agent daily budget at release time, refused with the R5-shaped empty payload, is the cheap version.</div></div>
+      <div class="row"><span class="k">A2, A4</span><div><strong>Stand as written.</strong> Security confirmed the group-chat redirect fires regardless of grant existence, so bystanders learn nothing about grants; cryptography confirmed the raw root bytes never reach redux, a log or an action.</div></div>
+    </div>
+  </section>
+
+  <!-- ===== DISAGREE ===== -->
+  <section id="disagree">
+    <h2>Where they disagree</h2>
+    <p class="sub">Six reviewers, six different first moves. That spread is itself a finding: the problems are not in one place.</p>
+    <ul class="moves">
+      <li><span class="lens">architecture</span><b>Ship manual fact entry</b>Every dollar of crate rigor protects a hypothetical until a person can type a fact in.</li>
+      <li><span class="lens">security</span><b>Fix the standing no-op</b>A privacy feature that silently does nothing while its log claims success is worse than not having it.</li>
+      <li><span class="lens">implementation</span><b>Web Locks before anything ships</b>The only finding that deletes a person's own data with no trace, on the one scenario the product calls routine.</li>
+      <li><span class="lens">cryptography</span><b>Per-compartment random keys</b>Every other crypto finding is a variant of "an old copy comes back"; this is where it reverses an explicit destroy.</li>
+      <li><span class="lens">datastore</span><b>Kill the fixture, keep the budget</b>Nobody has a number for when growth stops being tolerable, because the only number measures a shape that will never exist.</li>
+      <li><span class="lens">agentic</span><b>Close the trusted-writes bypass</b>The one hole that works exactly as designed rather than needing a compromised server or device.</li>
+    </ul>
+    <h3>Two direct contradictions</h3>
+    <ul>
+      <li><strong>Sender key from the chat payload.</strong> Cryptography proposes it as a cheap upgrade to the fingerprint check. Security points out the chat payload's public keys are also server-supplied and nothing is signed, so it removes a round trip and no trust. Security is right; keep the change for the round trip, not the guarantee.</li>
+      <li><strong>Was wasm the wrong call?</strong> Architecture says plain JS over IndexedDB would clear every gate with a fraction of the toolchain. Datastore says SQLite in wasm would fix indexing and compaction for free but at three to six times the download, past the size gate. Both are true; the honest framing is that the 300 KB gate, not performance, is the argument for this crate.</li>
+    </ul>
+  </section>
+
+  <!-- ===== PLAN ===== -->
+  <section id="plan">
+    <h2>Fix plan</h2>
+    <p class="sub">Ordered by what blocks shipping, then by cost. Ks refer to the kill list, letters to the per-lens tables.</p>
+
+    <p class="plan-title">Before phase 2 ships. All small.</p>
+    <p class="plan-sub">A day or two of work, and the product stops lying about itself.</p>
+    <ol class="plan">
+      <li><span class="n">1</span><span>Standing-aware release path in the crate, plus the missing test; ack only what was sent.</span><span class="ref">K1 · S1</span></li>
+      <li><span class="n">2</span><span>Buffer inbound Lattice markers until the store is ready; replay by message id.</span><span class="ref">K7 · G1 · I4</span></li>
+      <li><span class="n">3</span><span>"Add to your data" form on the Your data page, schema-driven, author you.</span><span class="ref">K2 · A1 · G7</span></li>
+      <li><span class="n">4</span><span>Grant sync as a sequential loop; surface flush_failed; close awaits a flush; guard restoreFrame.</span><span class="ref">K8 · I2 · I3</span></li>
+      <li><span class="n">5</span><span>Quote and cap the agent's purpose on the consent sheet and in the log; strip control characters.</span><span class="ref">S2 · G3</span></li>
+      <li><span class="n">6</span><span>Pad release bodies to size buckets with the existing padBlock pattern.</span><span class="ref">C4</span></li>
+      <li><span class="n">7</span><span>Show author.kind on every node in Your data, with an agent-written filter.</span><span class="ref">S5</span></li>
+      <li><span class="n">8</span><span>A limit on the proposal-parent query; SDK dedup on release id; a capability probe before the first open; a VENDORED_FROM stamp; tag Lattice sidechains.</span><span class="ref">I6 · S7 · I7 · I8 · A8</span></li>
+    </ol>
+
+    <p class="plan-title">Before anyone relies on it. Medium.</p>
+    <p class="plan-sub">Each closes a class of loss, not a bug.</p>
+    <ol class="plan">
+      <li><span class="n">9</span><span>Server-sequenced frames (see Many devices): the server orders ciphertext, devices pull, the cache is a cache. Retires the lock, the collision and the second-device gap.</span><span class="ref">K3 · A3 · A7 · Devices</span></li>
+      <li><span class="n">10</span><span>Random key per compartment, wrapped by the derived key; destroy deletes the wrap. Then the tombstone list in the backup manifest.</span><span class="ref">K4 · C1 · C3</span></li>
+      <li><span class="n">11</span><span>Bind compact and run it past a frame threshold. Rebuild the perf fixture from single writes, populate every field, gate wallMs.</span><span class="ref">K5 · D1 · D2 · D3 · I5</span></li>
+      <li><span class="n">12</span><span>Frame index in the AAD with a persisted high-water mark, so a deleted frame is detected.</span><span class="ref">C2</span></li>
+      <li><span class="n">13</span><span>Audience tiers on facts, a ceiling on grants enforced in evaluate, sensitive compartments that are ask-only and never standing, free text at the strictest tier.</span><span class="ref">Identity</span></li>
+      <li><span class="n">14</span><span>Trusted-write nodes stay unreleasable to other grants until reviewed once; delegation tasks scanned for received facts.</span><span class="ref">K6 · G2 · G3</span></li>
+      <li><span class="n">15</span><span>Existence lookup before an agent or Ion write; singleton person; a supersedes field and a scoped id for the proposing agent.</span><span class="ref">D6 · D7 · G4</span></li>
+      <li><span class="n">16</span><span>Mixed requests release the auto subset at once and the ask remainder later; per-selector ask counts; a local pushes-this-week counter.</span><span class="ref">G6 · S4 · G8</span></li>
+      <li><span class="n">17</span><span>If server-sequenced frames are not taken: wire data restore on a new device, a distinct "not restored yet" state, detect key-present-files-evicted.</span><span class="ref">A3 · A7</span></li>
+      <li><span class="n">18</span><span>Per-agent daily release budget from the disclosure log, refused with the empty payload.</span><span class="ref">S6 · A6 dispute</span></li>
+      <li><span class="n">19</span><span>A (compartment, type) index and an adjacency map; a per-agent index on the log; records stamped with their schema version, additive-only from here.</span><span class="ref">D4 · D5 · D10 · D9</span></li>
+      <li><span class="n">20</span><span>Cascade or parent-status check on delete; a free-text escape-hatch type per compartment; the one-line note when an ask names a type that does not exist.</span><span class="ref">D8 · A4 · G5</span></li>
+    </ol>
+
+    <p class="plan-title">Accept, and write it down.</p>
+    <ol class="plan">
+      <li><span class="n">21</span><span>Agent identity is server-asserted until Salt signs messages. Reword A1.</span><span class="ref">S3 · C5</span></li>
+      <li><span class="n">22</span><span>First restore onto a wiped device has no rollback defence in this architecture.</span><span class="ref">C3 · S8</span></li>
+      <li><span class="n">23</span><span>The Rust crate stays for phase 1 because of the size gate; further crate investment is weighed against plain JS.</span><span class="ref">A6</span></li>
+      <li><span class="n">24</span><span>The schema boundary on secrets stays. The workaround is plain chat, and the person is told so.</span><span class="ref">G5</span></li>
+    </ol>
+
+    <h3>What survived six attacks</h3>
+    <div class="good">
+      <ul>
+        <li><strong>Release re-derives authorisation from a fresh evaluate</strong> instead of trusting its facts argument. Named by four of six lenses as the one pattern most consent systems get wrong and this one gets right.</li>
+        <li><strong>takeFrame and restoreFrame</strong> treat "encrypted but not yet durable" as distinct from "lost", and chose the race-free design over an ack watermark.</li>
+        <li><strong>The primitives.</strong> A real CSPRNG root, HKDF, AES-256-GCM, non-extractable keys, and the padded, separately keyed backup manifest. The padding just was not applied to the one payload that needed it.</li>
+      </ul>
+    </div>
+
+    <p class="foot">Sources: six reviewer reports in <span class="mono">~/.claude/jobs/1721d84f/tmp/swarm/</span> (architecture, security, implementation, crypto, datastore, agentic), each citing file and line on the <span class="mono">lattice</span> branches as of 2026-09-15. Three criticals (K1, K2, K5) were re-verified by the lead in the code; the rest stand on the reviewer's citations. The sibling page "Inside Lattice" describes the design these findings attack.</p>
+  </section>
+
+  <!-- ===== SHAPE ===== -->
+  <section id="shape">
+    <h2>Is this the right shape?</h2>
+    <p class="sub">Owner: "I need Salt to be the place where agent execution and interaction get trusted, because the source of information about the user's identity and preferences is bastioned there. That is the user's authority, and thus Salt's authority."</p>
+    <p><strong>The vision is right and Salt already owns the hard half.</strong> Authority means something a third party can verify. Salt registers the person's keys, knows their standing (verified contacts, account age, real-money history, trust score, work and hiring records), holds agents' third-party credentials and lends them under grants, and runs the rails where consequences land: transfers, invoices, work orders, spending policies. A counterparty can check all of that against Salt. Lattice adds the other half, the person's own facts, and holding them on the device is the right call given the promise that Salt cannot read them.</p>
+    <p><strong>The unit of release is the wrong shape.</strong> Lattice releases an unsigned prose fact, inside a chat, only while the phone is awake, with no id and no audience. Only the receiving agent can know it came from the person under a grant. Salt's authority has nothing to sign, and the worst findings above follow from that directly: facts launder into delegation prose (K6), duplicate because they cannot be referenced (G4), and drop when the phone is asleep (K7). An authority that is offline while the person sleeps is not one agents can execute against.</p>
+
+    <div class="tbl-wrap"><table class="f">
+      <thead><tr><th>What leaves the phone</th><th>Today: a fact</th><th>Proposed: a claim</th></tr></thead>
+      <tbody>
+        <tr><td>Shape</td><td>{path, field, value, author: you}</td><td>{subject: your key, predicate or value, audience: agent key, grant, issued, expires} signed by your key</td></tr>
+        <tr><td>Who can verify it</td><td>Nobody. The receiving agent trusts the chat.</td><td>Anyone, by fetching your key from Salt. Salt vouches for who, you vouch for what.</td></tr>
+        <tr><td>Can it travel</td><td>Only as prose, with no trace (K6)</td><td>Only to its audience; re-presentation elsewhere fails verification</td></tr>
+        <tr><td>Value or answer</td><td>Always the value</td><td>Often a predicate: "is vegetarian", "free Friday evening", "budget covers this". The fact never leaves.</td></tr>
+        <tr><td>When it is available</td><td>While the app is open (K7)</td><td>While the claim is valid; issued at grant time, renewed on a schedule, held by the agent</td></tr>
+        <tr><td>Record of it</td><td>A log entry on the phone</td><td>A signed receipt the agent can present, the shape Grains' receipt chains expect</td></tr>
+        <tr><td>Identity tiers</td><td>None; a topic grant reaches every tier</td><td>Predicates answer without exposing the private tier; values carry their tier and the audience ceiling applies</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Ion: the wrong first bet, not the wrong idea</h3>
+    <p>The bastion has to be full and current without a third party reading the chats. Open extraction at 2.9% recall will not do that for a long time. Three cheaper fillers come first: the person typing a fact (K2), capturing a fact at the moment the person answers an agent's question in chat (the answer is the fact, and it is already typed), and the embedding recall that works today. Extraction is the optimisation once the owner's own labelled conversations exist, which is the decision already recorded in salt-ion's baseline.</p>
+
+    <h3>The reframe in one line</h3>
+    <p>Salt is the authority for identity, standing and consequences. The person is the authority for facts, held on their device. Both issue verifiable claims under one Salt-registered key, and agents execute against claims, not against chat. Lattice is the right store for that. Its wire protocol, the fact in a message, is the part to replace, and it is the same change that fixes the review's structural findings.</p>
+    <p>Cost, honestly: signing needs the person's private key on the device, which the vault already provides, and a verifier path that fetches keys from Salt, which exists. Salt does not sign messages today (S3), so this is the first signed artefact in the product and the release format, the SDK's receive path and the disclosure log all change. Medium to large, and it is the change that makes the other twenty-four worth doing.</p>
+  </section>
+</div>

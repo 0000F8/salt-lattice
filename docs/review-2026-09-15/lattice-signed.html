@@ -1,0 +1,513 @@
+<title>Lattice, Signed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #F6F7FA; --panel: #FFFFFF; --panel-2: #EEF1F6;
+    --ink: #111827; --ink-2: #4B5563; --ink-3: #7C8594;
+    --line: #D6DBE4; --line-2: #E6E9EF;
+    --blue: #2563EB; --blue-ink: #1D4ED8; --blue-wash: #E8EFFD;
+    --salt: #0F766E; --salt-wash: #D9F1EE;
+    --agent: #7C3AED; --agent-wash: #EDE7FB;
+    --crit: #B42318; --crit-wash: #FEE4E2;
+    --warn: #B54708; --warn-wash: #FEF0C7;
+    --good: #16794C; --good-wash: #E3F5EC;
+    --shadow: 0 1px 2px rgba(17,24,39,.06);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0C121D; --panel: #131B29; --panel-2: #1A2334;
+      --ink: #E7EBF2; --ink-2: #AEB7C6; --ink-3: #7B869A;
+      --line: #2B3547; --line-2: #222B3B;
+      --blue: #6D9BFF; --blue-ink: #8FB1FF; --blue-wash: #16264A;
+      --salt: #5EEAD4; --salt-wash: #0F2F2B;
+      --agent: #C4B5FD; --agent-wash: #2A1F4D;
+      --crit: #F97066; --crit-wash: #3B1512;
+      --warn: #FDB022; --warn-wash: #3A2A0A;
+      --good: #4FCB8A; --good-wash: #10281C;
+      --shadow: none; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0C121D; --panel: #131B29; --panel-2: #1A2334;
+    --ink: #E7EBF2; --ink-2: #AEB7C6; --ink-3: #7B869A;
+    --line: #2B3547; --line-2: #222B3B;
+    --blue: #6D9BFF; --blue-ink: #8FB1FF; --blue-wash: #16264A;
+    --salt: #5EEAD4; --salt-wash: #0F2F2B;
+    --agent: #C4B5FD; --agent-wash: #2A1F4D;
+    --crit: #F97066; --crit-wash: #3B1512;
+    --warn: #FDB022; --warn-wash: #3A2A0A;
+    --good: #4FCB8A; --good-wash: #10281C;
+    --shadow: none; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif; font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding-block: 40px 96px; padding-inline: 20px; }
+  .mono, code { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code { font-size: .86em; background: var(--panel-2); padding: .1em .35em; border-radius: 3px; }
+  pre { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.5; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 4px; padding: 14px 16px; overflow-x: auto; margin: 12px 0 18px; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  a { color: var(--blue-ink); }
+  .eyebrow { font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 12px; }
+  h1 { font-size: clamp(34px, 5vw, 48px); font-weight: 600; letter-spacing: -.02em; line-height: 1.05; margin: 0 0 16px; text-wrap: balance; }
+  .lede { font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 64ch; margin: 0 0 28px; text-wrap: pretty; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 14px; margin-bottom: 36px; }
+  nav.toc a { color: var(--ink-2); text-decoration: none; }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--blue-ink); text-decoration: underline; }
+  section { margin: 0 0 64px; }
+  h2 { font-size: 26px; font-weight: 600; letter-spacing: -.015em; margin: 0 0 6px; text-wrap: balance; }
+  h3 { font-size: 18px; font-weight: 600; margin: 30px 0 6px; }
+  .sub { color: var(--ink-3); font-size: 14px; margin: 0 0 20px; }
+  p { max-width: 70ch; margin: 0 0 14px; text-wrap: pretty; }
+  ul, ol { max-width: 70ch; padding-left: 22px; margin: 0 0 14px; }
+  li { margin: 0 0 6px; }
+  li::marker { color: var(--ink-3); }
+
+  .thesis { border-left: 3px solid var(--blue); background: var(--panel); padding: 16px 20px; border-radius: 0 4px 4px 0; margin: 0 0 24px; max-width: 80ch; box-shadow: var(--shadow); }
+  .thesis p { margin: 0 0 10px; max-width: none; }
+  .thesis p:last-child { margin: 0; }
+
+  .signers { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 16px 0 8px; padding: 0; list-style: none; max-width: none; }
+  .signers li { background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; padding: 14px 16px; margin: 0; font-size: 14.5px; border-top: 3px solid var(--line); }
+  .signers li.s-salt { border-top-color: var(--salt); } .signers li.s-person { border-top-color: var(--blue); } .signers li.s-agent { border-top-color: var(--agent); }
+  .signers li b { display: block; font-size: 16px; margin-bottom: 4px; }
+  .signers li .k { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-3); display: block; margin-bottom: 8px; }
+
+  figure { margin: 22px 0 26px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 18px 18px 12px; box-shadow: var(--shadow); }
+  figure svg { display: block; width: 100%; height: auto; max-width: 100%; color: var(--ink); font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif; }
+  figure .scroll { overflow-x: auto; }
+  figure .scroll svg { min-width: 720px; }
+  figcaption { font-size: 13.5px; color: var(--ink-2); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line-2); max-width: 80ch; }
+  .fig-num { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
+  svg .box { fill: var(--panel); stroke: currentColor; stroke-width: 1.2; }
+  svg .box-soft { fill: var(--panel-2); stroke: var(--line); stroke-width: 1; }
+  svg .box-salt { fill: var(--salt-wash); stroke: var(--salt); stroke-width: 1.4; }
+  svg .box-person { fill: var(--blue-wash); stroke: var(--blue); stroke-width: 1.4; }
+  svg .box-agent { fill: var(--agent-wash); stroke: var(--agent); stroke-width: 1.4; }
+  svg .t { fill: currentColor; font-size: 12.5px; }
+  svg .t-b { fill: currentColor; font-size: 13px; font-weight: 600; }
+  svg .t-s { fill: var(--ink-3); font-size: 11px; }
+  svg .t-m { fill: currentColor; font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+  svg .t-salt { fill: var(--salt); font-size: 11.5px; font-weight: 500; }
+  svg .t-person { fill: var(--blue-ink); font-size: 11.5px; font-weight: 500; }
+  svg .t-agent { fill: var(--agent); font-size: 11.5px; font-weight: 500; }
+  svg .ln { stroke: currentColor; stroke-width: 1.2; fill: none; }
+  svg .ln-salt { stroke: var(--salt); stroke-width: 1.6; fill: none; }
+  svg .ln-person { stroke: var(--blue); stroke-width: 1.6; fill: none; }
+  svg .ln-agent { stroke: var(--agent); stroke-width: 1.6; fill: none; }
+  svg .ln-dim { stroke: var(--ink-3); stroke-width: 1.1; fill: none; stroke-dasharray: 4 3; }
+
+  .tbl-wrap { overflow-x: auto; margin: 12px 0 8px; }
+  table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line-2); }
+  th { font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; background: var(--panel-2); }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { font-weight: 500; }
+  .tag { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 11px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line); color: var(--ink-3); white-space: nowrap; }
+  .tag.keep { color: var(--good); border-color: var(--good); }
+  .tag.change { color: var(--warn); border-color: var(--warn); }
+  .tag.drop { color: var(--crit); border-color: var(--crit); }
+  .tag.new { color: var(--blue-ink); border-color: var(--blue); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; margin: 16px 0 0; padding: 0; list-style: none; max-width: none; }
+  .grid li { background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; padding: 12px 14px; margin: 0; font-size: 14.5px; }
+  .grid li b { display: block; font-weight: 600; margin-bottom: 4px; }
+
+  .phase { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); margin: 14px 0; padding: 14px 18px; }
+  .phase h4 { margin: 0 0 4px; font-size: 16px; }
+  .phase .meta { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-3); margin: 0 0 8px; }
+  .phase ul { margin: 0; max-width: none; }
+  .phase li { font-size: 14.5px; }
+
+  .decide { border-left: 3px solid var(--warn); background: var(--warn-wash); padding: 12px 16px; border-radius: 0 4px 4px 0; max-width: 80ch; margin: 14px 0; }
+  .decide p { margin: 0 0 8px; max-width: none; font-size: 15px; }
+  .decide p:last-child { margin: 0; }
+  .foot { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3); max-width: none; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">Salt · Lattice · redesign · 2026-09-15</p>
+  <h1>Lattice, Signed</h1>
+  <p class="lede">A redesign of Lattice around signed claims. The store stays on the person's device and Salt still cannot read a fact. What changes is what leaves the phone: not a value in a chat message, but a signed, audience-bound, expiring claim that any counterparty can verify against a key Salt registered. That is what makes the person's authority into Salt's authority, and it is one change that resolves most of what the adversarial review found.</p>
+
+  <nav class="toc" aria-label="Sections">
+    <a href="#thesis">Thesis</a>
+    <a href="#signers">Three signers</a>
+    <a href="#documents">The documents</a>
+    <a href="#flow">A request, signed</a>
+    <a href="#predicates">Predicates and tiers</a>
+    <a href="#availability">Availability</a>
+    <a href="#store">The store</a>
+    <a href="#layers">What changes, by layer</a>
+    <a href="#threats">Threat model</a>
+    <a href="#ion">Ion</a>
+    <a href="#plan">Build plan</a>
+    <a href="#decisions">Decisions to take</a>
+  </nav>
+
+  <!-- ===== THESIS ===== -->
+  <section id="thesis">
+    <h2>Thesis</h2>
+    <div class="thesis">
+      <p><strong>Salt is the authority for identity, standing and consequences.</strong> It registers keys, knows who is verified, who paid whom, who delivered, and it runs the rails where money and work orders settle. It signs that.</p>
+      <p><strong>The person is the authority for facts about themselves.</strong> The facts live on their device under their own key. When an agent needs one, the device issues a claim and signs it. Salt never sees the fact.</p>
+      <p><strong>Agents execute against claims, not against chat.</strong> A claim names its audience, carries its grant, expires, and verifies offline against the subject's key, which Salt vouches for. It can travel to another agent, a merchant or Grains and still be checked. It cannot be laundered, duplicated or spoofed, and it is valid while the person sleeps.</p>
+    </div>
+    <p>Everything below is the mechanism for those three sentences. The current branch keeps its crate, worker, compartments, rules and grants; it replaces the release format, adds a signing key, adds predicates and tiers, and moves the log to server-sequenced frames.</p>
+  </section>
+
+  <!-- ===== SIGNERS ===== -->
+  <section id="signers">
+    <h2>Three signers, one curve</h2>
+    <p class="sub">Every signed document uses the primitives Grains already specifies, so nothing new has to be verified by anyone.</p>
+    <ul class="signers">
+      <li class="s-salt"><b>Salt</b><span class="k">authority key · secp256k1 in KMS · did:key:zQ3s…</span>Signs attestations: this DID belongs to this Salt account, created then, verified contacts, standing as the person allows. Countersigns grants as registrar. Never signs a fact.</li>
+      <li class="s-person"><b>The person</b><span class="k">claim key · secp256k1 · generated on device · wrapped in the vault</span>Signs claims, consents, receipts and grants. The public half is registered on the account like the PGP fingerprint is today, and bound to the PGP key by a signed binding so the two custodies name one person.</li>
+      <li class="s-agent"><b>The agent</b><span class="k">agent key · secp256k1 · did:key · Grains-native</span>Signs requests, so the phone no longer asks the server who sent one. Is the audience of claims and grants. Presents claims onward with its own signature over the presentation.</li>
+    </ul>
+    <p>Primitives, inherited verbatim from <code>grains-identity/0.1</code>: secp256k1 keys encoded as <code>did:key</code>, canonical JSON (sorted keys, no whitespace, no floats, <code>sig</code> removed), ES256K with RFC 6979 nonces and low-s, signatures as <code>{alg, kid, value}</code>. A verifier that already checks a Grains receipt checks a Salt claim with the same code.</p>
+
+    <figure>
+      <div class="scroll">
+      <svg viewBox="0 0 960 330" role="img" aria-label="Salt signs an attestation about the person's DID and countersigns the grant. The person's device signs claims and receipts. The agent signs requests and presents claims to a counterparty or Grains, which verifies the claim against the person's DID and the attestation against Salt's key.">
+        <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <rect x="20" y="40" width="200" height="96" rx="4" class="box-salt"/>
+        <text x="120" y="62" text-anchor="middle" class="t-b">Salt</text>
+        <text x="120" y="80" text-anchor="middle" class="t-s">registrar of keys and grants</text>
+        <text x="120" y="96" text-anchor="middle" class="t-s">signs: attestation, grant countersign</text>
+        <text x="120" y="112" text-anchor="middle" class="t-s">sequences ciphertext frames</text>
+        <text x="120" y="128" text-anchor="middle" class="t-salt">never reads a fact</text>
+
+        <rect x="380" y="40" width="200" height="96" rx="4" class="box-person"/>
+        <text x="480" y="62" text-anchor="middle" class="t-b">Person's device</text>
+        <text x="480" y="80" text-anchor="middle" class="t-s">Lattice store, claim key</text>
+        <text x="480" y="96" text-anchor="middle" class="t-s">signs: claims, consents, receipts, grants</text>
+        <text x="480" y="112" text-anchor="middle" class="t-s">evaluates grants and predicates</text>
+        <text x="480" y="128" text-anchor="middle" class="t-person">the only place a fact is plaintext</text>
+
+        <rect x="740" y="40" width="200" height="96" rx="4" class="box-agent"/>
+        <text x="840" y="62" text-anchor="middle" class="t-b">Agent</text>
+        <text x="840" y="80" text-anchor="middle" class="t-s">did:key, Grains or self-hosted</text>
+        <text x="840" y="96" text-anchor="middle" class="t-s">signs: requests, presentations</text>
+        <text x="840" y="112" text-anchor="middle" class="t-s">holds claims until they expire</text>
+        <text x="840" y="128" text-anchor="middle" class="t-agent">executes against claims</text>
+
+        <!-- salt -> person: attestation -->
+        <line x1="220" y1="72" x2="380" y2="72" class="ln-salt" marker-end="url(#ar)"/>
+        <text x="300" y="64" text-anchor="middle" class="t-salt">attestation of your DID</text>
+        <!-- person -> salt: grant to countersign -->
+        <line x1="380" y1="110" x2="220" y2="110" class="ln-person" marker-end="url(#ar)"/>
+        <text x="300" y="156" text-anchor="middle" class="t-person">grant shapes, frames (ciphertext)</text>
+        <!-- agent -> person: signed request -->
+        <line x1="740" y1="72" x2="580" y2="72" class="ln-agent" marker-end="url(#ar)"/>
+        <text x="660" y="64" text-anchor="middle" class="t-agent">signed request</text>
+        <!-- person -> agent: claims -->
+        <line x1="580" y1="110" x2="740" y2="110" class="ln-person" marker-end="url(#ar)"/>
+        <text x="660" y="126" text-anchor="middle" class="t-person">claims + receipt</text>
+
+        <!-- counterparty -->
+        <rect x="560" y="220" width="220" height="80" rx="4" class="box"/>
+        <text x="670" y="242" text-anchor="middle" class="t-b">Counterparty, Grains, another agent</text>
+        <text x="670" y="260" text-anchor="middle" class="t-s">verifies claim.sig against subject DID</text>
+        <text x="670" y="275" text-anchor="middle" class="t-s">verifies attestation against Salt's key</text>
+        <text x="670" y="290" text-anchor="middle" class="t-s">checks audience, grant, expiry. Offline.</text>
+        <line x1="840" y1="136" x2="720" y2="220" class="ln-agent" marker-end="url(#ar)"/>
+        <text x="806" y="186" text-anchor="middle" class="t-agent">presents claim</text>
+        <line x1="120" y1="136" x2="560" y2="262" class="ln-dim"/>
+        <text x="250" y="236" text-anchor="middle" class="t-s">Salt's public key, published once at .well-known</text>
+      </svg>
+      </div>
+      <figcaption><span class="fig-num">Fig. 1</span>Two authorities, one verifier path. Salt vouches for who, under its key. The person vouches for what, under theirs. A counterparty checks both without asking Salt anything at verification time, because a claim carries the attestation and both keys are in the DIDs themselves.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== DOCUMENTS ===== -->
+  <section id="documents">
+    <h2>The documents</h2>
+    <p class="sub">Five signed shapes. Specs live in the Grains repo beside the credential-authority spec, vendor-neutral, with Salt as the reference registrar and the reference issuer, and vectors mirrored into salt-api tests, the way <code>credential-authority/0.1</code> already works.</p>
+
+    <h3>1. Claim <span class="tag new">personal-claim/0.1</span></h3>
+    <p>What leaves the phone. One claim per fact field or per predicate. Self-contained: it embeds the attestation, so a verifier needs nothing outside it.</p>
+<pre><code>{
+  "spec": "personal-claim/0.1",
+  "id": "018f5a2c-…",                       // UUIDv7, sortable
+  "subject": "did:key:zQ3sPerson…",          // the person's claim key
+  "audience": ["did:key:zQ3sAgent…"],        // who may hold and present this
+  "grant": "g_01J8W…",                       // the grant it was issued under
+  "kind": "value",                           // value | predicate
+  "path": "preferences/food/restriction/Peanuts",
+  "type": "preferences.food.restriction",
+  "field": "kind",
+  "value": "allergy",
+  "tier": "contacts",                        // public | contacts | private
+  "purpose": "pick a restaurant for Friday", // the request's purpose, capped at 280
+  "issued_at": "2026-09-15T14:02:11Z",
+  "expires_at": "2026-09-22T14:02:11Z",
+  "receipt": "r_018f5a2c-…",
+  "attestation": { …salt-attestation/0.1, signed by Salt… },
+  "sig": {"alg": "ES256K", "kid": "did:key:zQ3sPerson…", "value": "…"}
+}</code></pre>
+    <p>A predicate claim carries a question and a signed answer instead of a value. The fact never leaves.</p>
+<pre><code>{
+  "spec": "personal-claim/0.1",
+  "kind": "predicate",
+  "predicate": {"op": "none", "path": "preferences/food/restriction/*", "field": "kind", "arg": "allergy"},
+  "answer": false,                           // "no allergy restrictions": true/false only
+  "tier": "contacts",
+  …subject, audience, grant, issued_at, expires_at, receipt, attestation, sig…
+}</code></pre>
+    <p>Predicate operators are a closed vocabulary evaluated inside the crate: <code>exists</code>, <code>none</code>, <code>eq</code>, <code>in</code>, <code>gte</code>, <code>lte</code>, <code>before</code>, <code>after</code>, <code>free_between</code> (schedule). No free-form expressions, no composition beyond one operator per claim, and each predicate is governed by the same selector rules and tier ceiling as the value it asks about.</p>
+
+    <h3>2. Grant <span class="tag change">salt-grant/0.1</span></h3>
+    <p>Today a server row. Now a document the person signs and Salt countersigns, stored on the server as before, mirrored into the store as before, and presentable by the agent as proof it may hold claims from this subject.</p>
+<pre><code>{
+  "spec": "salt-grant/0.1",
+  "id": "g_01J8W…",
+  "subject": "did:key:zQ3sPerson…",
+  "audience": "did:key:zQ3sAgent…",
+  "rules": [{"selector": "preferences.food.*", "mode": "auto"},
+            {"selector": "schedule.*",         "mode": "ask"}],
+  "ceiling": "contacts",                      // highest tier any rule may reach
+  "predicates": true,                         // may ask predicates under these rules
+  "trusted_writes": [],
+  "standing": {"expires_at": "2026-12-14T00:00:00Z"},
+  "version": 3,
+  "issued_at": "…",
+  "sigs": [{"alg": "ES256K", "kid": "did:key:zQ3sPerson…", "value": "…"},
+           {"alg": "ES256K", "kid": "did:key:zQ3sSalt…",   "value": "…", "role": "registrar"}]
+}</code></pre>
+
+    <h3>3. Request <span class="tag change">signed</span></h3>
+    <p>The same marker and body as today, plus a signature by the agent's key. The phone verifies the signature before evaluating anything. The server-supplied fingerprint lookup is gone; agent identity is the key that signed the request, and the grant's audience is that key.</p>
+<pre><code>[[SALT-LATTICE-REQUEST id=01J8XK3V…]]
+{"purpose": "pick a restaurant for Friday",
+ "asks": ["preferences.food.cuisine.*", "preferences.food.restriction.*"],
+ "predicates": [{"op": "free_between", "path": "schedule/*", "arg": ["2026-09-18T18:00Z", "2026-09-18T22:00Z"]}],
+ "wants": "claims",
+ "sig": {"alg": "ES256K", "kid": "did:key:zQ3sAgent…", "value": "…"}}</code></pre>
+
+    <h3>4. Receipt <span class="tag new">salt-receipt/0.1 · type disclosure</span></h3>
+    <p>Signed by the person. Lists the claim ids issued, to whom, under which grant, when. Kept in the disclosure log on the device and handed to the agent with the claims, so an agent can prove to a counterparty, or to Grains' receipt chain, that it obtained what it holds legitimately. A <code>consent</code> receipt records the person's approval of ask items; a <code>revocation</code> receipt tells an agent to drop what it holds.</p>
+
+    <h3>5. Attestation <span class="tag new">salt-attestation/0.1</span></h3>
+    <p>Signed by Salt's authority key. Short-lived (24 hours), fetched by the phone and embedded in each claim. It says only what a public profile already says, plus what the person opts in to.</p>
+<pre><code>{
+  "spec": "salt-attestation/0.1",
+  "subject": "did:key:zQ3sPerson…",
+  "pgp_fingerprint": "A1B2…",                 // the binding between the two custodies
+  "account": {"username": "ada", "created_at": "2025-11-02", "legal_accepted": true},
+  "standing": {"verified_contacts": 12, "real_money_counterparties": 4, "hiring": "…"},  // person-chosen fields
+  "issued_at": "…", "expires_at": "…",
+  "sig": {"alg": "ES256K", "kid": "did:key:zQ3sSalt…", "value": "…"}
+}</code></pre>
+    <p>This is the sentence "the user's authority, and thus Salt's authority" as bytes: the claim is the person's signature, the attestation inside it is Salt's, and the DID in both is the same.</p>
+  </section>
+
+  <!-- ===== FLOW ===== -->
+  <section id="flow">
+    <h2>A request, signed</h2>
+    <p class="sub">The same six steps as today. Three of them change.</p>
+    <figure>
+      <div class="scroll">
+      <svg viewBox="0 0 960 300" role="img" aria-label="A signed request arrives, its signature is verified against the agent DID, the grant is evaluated into auto, ask and omitted, ask items go to the consent sheet, claims are issued and signed with a receipt, and the claims travel back inside the encrypted chat; the agent caches them until expiry.">
+        <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+        <rect x="20" y="30" width="148" height="80" rx="4" class="box-agent"/>
+        <text x="94" y="52" text-anchor="middle" class="t-b">1 · Request</text>
+        <text x="94" y="70" text-anchor="middle" class="t-s">asks, predicates, purpose</text>
+        <text x="94" y="86" text-anchor="middle" class="t-agent">signed by agent key</text>
+        <rect x="174" y="30" width="148" height="80" rx="4" class="box-person"/>
+        <text x="248" y="52" text-anchor="middle" class="t-b">2 · Verify</text>
+        <text x="248" y="70" text-anchor="middle" class="t-s">sig ↔ grant audience did</text>
+        <text x="248" y="86" text-anchor="middle" class="t-person">no server lookup</text>
+        <rect x="328" y="30" width="148" height="80" rx="4" class="box"/>
+        <text x="402" y="52" text-anchor="middle" class="t-b">3 · Evaluate</text>
+        <text x="402" y="70" text-anchor="middle" class="t-s">rules, ceiling, tiers</text>
+        <text x="402" y="86" text-anchor="middle" class="t-s">predicates answered in-core</text>
+        <rect x="482" y="30" width="148" height="80" rx="4" class="box"/>
+        <text x="556" y="52" text-anchor="middle" class="t-b">4 · Consent</text>
+        <text x="556" y="70" text-anchor="middle" class="t-s">ask items, Salt chrome</text>
+        <text x="556" y="86" text-anchor="middle" class="t-s">purpose quoted, capped</text>
+        <rect x="636" y="30" width="148" height="80" rx="4" class="box-person"/>
+        <text x="710" y="52" text-anchor="middle" class="t-b">5 · Issue</text>
+        <text x="710" y="70" text-anchor="middle" class="t-s">a claim per field or predicate</text>
+        <text x="710" y="86" text-anchor="middle" class="t-person">signed, with receipt</text>
+        <rect x="790" y="30" width="148" height="80" rx="4" class="box-agent"/>
+        <text x="864" y="52" text-anchor="middle" class="t-b">6 · Hold</text>
+        <text x="864" y="70" text-anchor="middle" class="t-s">SDK verifies, caches</text>
+        <text x="864" y="86" text-anchor="middle" class="t-agent">valid until expiry</text>
+        <line x1="168" y1="70" x2="174" y2="70" class="ln" marker-end="url(#ar2)"/>
+        <line x1="322" y1="70" x2="328" y2="70" class="ln" marker-end="url(#ar2)"/>
+        <line x1="476" y1="70" x2="482" y2="70" class="ln" marker-end="url(#ar2)"/>
+        <line x1="630" y1="70" x2="636" y2="70" class="ln" marker-end="url(#ar2)"/>
+        <line x1="784" y1="70" x2="790" y2="70" class="ln" marker-end="url(#ar2)"/>
+        <!-- auto bypass -->
+        <path d="M402,110 L402,150 L710,150 L710,110" class="ln" marker-end="url(#ar2)"/>
+        <text x="556" y="168" text-anchor="middle" class="t-s">auto items skip consent; the auto subset is issued at once, ask items follow (no latency tell)</text>
+        <!-- wire -->
+        <text x="20" y="200" class="t-b">On the wire, unchanged in kind:</text>
+        <text x="20" y="220" class="t-m">[[SALT-LATTICE-RELEASE id=…]]  {"request_id": "…", "claims": [ …signed claim documents… ], "receipt": { …signed… }}</text>
+        <text x="20" y="242" class="t-s">Inside the chat's E2E ciphertext, padded to a size bucket. Every open device sees the release arrive and dismisses its own consent sheet.</text>
+        <text x="20" y="272" class="t-s">A release with no claims is byte-identical to a release for a revoked grant, a rotated key or an unmatched selector, and now the same length too.</text>
+      </svg>
+      </div>
+      <figcaption><span class="fig-num">Fig. 2</span>Steps 2, 5 and 6 are new. The agent's signature replaces the server's word on who is asking; the issue step signs what leaves; the SDK verifies on receipt and holds claims until they expire, so a task while the person is asleep runs on what the agent already holds.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== PREDICATES ===== -->
+  <section id="predicates">
+    <h2>Predicates and tiers</h2>
+    <p class="sub">Two additions to the store that make the identity problem tractable.</p>
+    <h3>Tiers on facts, a ceiling on grants</h3>
+    <p>Every node carries a <code>tier</code>: <code>public</code>, <code>contacts</code>, <code>private</code>, <code>never</code>. It defaults from the compartment and from where the fact was learned: a fact captured from a room with a verified contact defaults to contacts, one from a lane with someone marked partner to private. Every grant carries a <code>ceiling</code>, defaulting to public for an agent the person has never dealt with. <code>evaluate</code> applies the ceiling beside the selector match, in the crate, so the rule has a test. <code>never</code> facts are never in a claim of any kind, and their absence is byte-identical to any other absence.</p>
+    <h3>Sensitive compartments</h3>
+    <p>New compartments <code>intimacy</code>, <code>belief</code> (religion, politics), <code>status</code> (immigration, legal), <code>mind</code> (mental health): ask-only, never standing, never auto, never predicates, and excluded from the compartment-level checkbox so a wide grant cannot include them by accident. Free text on any node takes the strictest tier of its compartment, because a note is where anything without a type ends up.</p>
+    <h3>Predicates: the answer without the fact</h3>
+    <p>"Is vegetarian", "free Friday evening", "budget covers this", "no allergy restrictions". The crate evaluates the operator over accepted nodes under the same rules and ceiling as a value, signs the boolean, and the fact stays on the phone. For a stranger's agent most tasks need only predicates, so the default grant for a new agent is <em>predicates only, ceiling public</em>, and values are something the person adds deliberately.</p>
+    <p>Predicates leak bits by repetition, so they are budgeted: a per-grant daily count enforced at issue time from the receipt log, refused past the budget with the empty release. And the budget refusal is not distinguishable from "nothing matched".</p>
+  </section>
+
+  <!-- ===== AVAILABILITY ===== -->
+  <section id="availability">
+    <h2>Availability without the phone</h2>
+    <p class="sub">An authority that is offline when the person sleeps is not one agents can build on.</p>
+    <ul>
+      <li><strong>Claims outlive the session.</strong> An on-demand claim is valid for seven days by default, a standing claim until the grant's standing expiry, at most ninety days. The agent holds them. A task at 3 a.m. runs on claims issued at 6 p.m.</li>
+      <li><strong>Standing is re-issuance, not a firehose.</strong> For auto selectors under a standing grant, the phone issues a claim bundle at grant time and re-issues when a covered fact changes, on any open device, after pulling the shared checkpoint. What travels is a claim per changed field, not a diff of values.</li>
+      <li><strong>Revocation is a signed receipt</strong> the agent must honour, delivered in chat; the SDK drops matching claims on receipt and Salt's grant row is the second source of truth for a verifier that checks online.</li>
+      <li><strong>Requests while every device is closed</strong> are answered when one opens, from a buffer keyed by message id, and the agent's SDK keeps the request pending rather than timing out into "you'll hear back", which today it cannot deliver on.</li>
+    </ul>
+  </section>
+
+  <!-- ===== STORE ===== -->
+  <section id="store">
+    <h2>The store</h2>
+    <p class="sub">Kept: the crate, the closed schema, compartments, versions, rules R1–R14. Changed: where the log lives and how records are identified.</p>
+    <ul>
+      <li><strong>Server-sequenced frames.</strong> Encrypted frames go to <code>lattice_frames</code>; the server assigns a per-user monotonic seq and broadcasts a content-free cable event; every device pulls since its last seq; the device's files are a cache. Records carry ULIDs; order is the server seq. Two devices editing one node produce two kept versions and the server's order says which is current. The backup row keeps only the key wrap. A new device unwraps the root and claim keys with the messages key and pulls.</li>
+      <li><strong>Per-compartment random keys</strong> wrapped by the derived key, so destroy deletes the wrap and an old frame is unrecoverable.</li>
+      <li><strong>Frame integrity.</strong> The per-compartment frame index is in the AAD and a high-water mark per device is kept in IndexedDB, so a deleted or withheld frame is detected on any device that has seen past it.</li>
+      <li><strong>Compaction</strong> bound on the wasm class; a device uploads a snapshot frame and the server drops earlier frames for that compartment.</li>
+      <li><strong>Dedup and identity.</strong> An agent's or Ion's proposal looks up an existing node by type, name and parent and edits it; <code>identity.person</code> is a singleton; delete cascades to children. A claim carries the node's path and the receipt carries the node id, so a later proposal can name what it supersedes.</li>
+      <li><strong>Trusted writes</strong> stay, but a trusted-write node is ineligible for any claim to an audience other than the writer until the person has reviewed it once, and every node shows its author.</li>
+    </ul>
+  </section>
+
+  <!-- ===== LAYERS ===== -->
+  <section id="layers">
+    <h2>What changes, by layer</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Layer</th><th>Today</th><th>Redesign</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>Crate (lattice-core)</td><td>Local seq, Fact struct, evaluate on selectors</td><td>ULID records, server-seq ordering, tier + ceiling in evaluate, predicate ops, claim builder (unsigned canonical doc), sensitive compartments</td><td><span class="tag change">change</span></td></tr>
+        <tr><td>Worker</td><td>OPFS primary, HKDF keys, frames</td><td>OPFS cache, push/pull frames, claim key in memory while open, ES256K sign via a vendored noble-secp256k1, request signature verify, per-compartment key wraps, padded frames</td><td><span class="tag change">change</span></td></tr>
+        <tr><td>Web app</td><td>requestHandler, consent sheet, Your data, Personal data card</td><td>Readiness buffer, quoted purpose, tier picker, predicates-only default, "Add to your data", capture-at-answer chips, author on nodes, claim key enrolment in the vault</td><td><span class="tag change">change</span></td></tr>
+        <tr><td>API</td><td>Grant rows, one backup blob</td><td>Claim DID on the account, PGP↔DID binding, attestation endpoint, Salt authority key (KMS), grant countersign, <code>lattice_frames</code> + cable event, claims mutex endpoint, discovery entry at <code>.well-known</code></td><td><span class="tag new">new</span></td></tr>
+        <tr><td>Agent SDK</td><td>Fact parsing, 15 s timeout, no verify</td><td>Agent key + did:key, signed requests, <code>verifyClaim</code> offline, claim cache with expiry, receipts, revocation handling, dedup by claim id, <code>task.claims(person)</code></td><td><span class="tag change">change</span></td></tr>
+        <tr><td>Grains</td><td>Receipt chain: payment, delivery, satisfaction</td><td>Specs <code>personal-claim/0.1</code>, <code>salt-grant/0.1</code>, <code>salt-receipt/0.1</code>, <code>salt-attestation/0.1</code> in the spec directory, vectors, <code>grains verify</code> accepts a claim; a task receipt may reference the disclosure receipt</td><td><span class="tag new">new</span></td></tr>
+        <tr><td>Wire</td><td>Unsigned facts in a release</td><td>Signed claims in a release, padded; signed requests; the markers unchanged</td><td><span class="tag change">change</span></td></tr>
+        <tr><td>Dropped</td><td colspan="2">The fingerprint lookup on every request. The whole-blob backup. The local seq counter. Standing pushes as value diffs. The fact shape without an id.</td><td><span class="tag drop">drop</span></td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ===== THREATS ===== -->
+  <section id="threats">
+    <h2>Threat model, stated</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Adversary</th><th>Can</th><th>Cannot</th></tr></thead>
+      <tbody>
+        <tr><td>Salt, compromised or coerced</td><td>Withhold or delay frames and messages. Bind a wrong DID to a username at registration time, the way any registrar can. Issue a false attestation of standing.</td><td>Read a fact. Forge a claim, a consent or a receipt. Alter a frame. Present as a granted agent (requests are signed by the agent's key, not asserted by the server). Reverse a destroy once per-compartment keys land.</td></tr>
+        <tr><td>A malicious agent with a grant</td><td>Ask within its rules, up to the budget. Hold claims until expiry. Forward a claim to a party that will not verify it.</td><td>Read past its ceiling. Ask predicates on sensitive compartments. Present a claim to a verifier under a different audience. Learn whether an unmatched selector had data. Write an unreviewed fact that reaches another agent.</td></tr>
+        <tr><td>A malicious agent without a grant</td><td>Send requests.</td><td>Distinguish "no grant" from "no data". Obtain a claim.</td></tr>
+        <tr><td>Script on the origin (XSS)</td><td>Everything the page can, while a device is unlocked: read the store, sign claims.</td><td>Persist past the CSP, which is strict <code>'self'</code>. This is the accepted A2 and it is unchanged: the strict CSP is the defence.</td></tr>
+        <tr><td>Stolen unlocked device</td><td>Read the store, issue claims.</td><td>Anything after the person revokes the claim key from another device: the attestation endpoint stops attesting it, and claims embed the attestation with a 24-hour expiry.</td></tr>
+        <tr><td>Wiped device restoring from the server</td><td colspan="2">Cannot detect a rollback of frames. Accepted and written down; the tombstone list in the manifest closes the live-device case.</td></tr>
+      </tbody>
+    </table></div>
+    <p>The binding between a Salt username and a claim DID is the one place Salt is trusted for identity. It is the same trust as today's PGP fingerprint, and the same remedy applies: verified contacts compare DIDs in person (the existing fingerprint verification flow extends to the claim DID), devices pin the DIDs of contacts they have seen, and a key change surfaces the way a PGP key change does now.</p>
+  </section>
+
+  <!-- ===== ION ===== -->
+  <section id="ion">
+    <h2>Ion's place</h2>
+    <p class="sub">The bastion has to be full and current without a third party reading the chats.</p>
+    <ul>
+      <li><strong>First, the person.</strong> "Add to your data" on the Your data page, driven by the schema. Item one of the fix plan; it does not depend on anything here.</li>
+      <li><strong>Second, capture at the moment of answer.</strong> When an agent's request could not be met from the store and the person answers in the lane in prose, the reply gets one-tap chips for the types the request asked for ("Save as: food restriction · cuisine"). The answer is already typed; saving it is a tap. Provenance and tier come from the lane. This is the highest-precision extractor available and it needs no model.</li>
+      <li><strong>Third, recall.</strong> The embedding index works today; it powers "Find in your data" and, later, Ion suggesting which existing node a proposal supersedes.</li>
+      <li><strong>Fourth, extraction.</strong> Grammar-constrained decoding against the schema, then a LoRA, decided once the owner's own labelled conversations exist. Ion's proposals land pending, carry the lane's tier, and dedup against existing nodes. Unchanged from the recorded decision, just no longer the thing the product waits on.</li>
+    </ul>
+  </section>
+
+  <!-- ===== PLAN ===== -->
+  <section id="plan">
+    <h2>Build plan</h2>
+    <p class="sub">Four phases. Each ships on its own and each is worth having without the next. The fix-list numbers refer to "Lattice Under Attack".</p>
+
+    <div class="phase">
+      <h4>Phase 0 · Stop the bleeding</h4>
+      <p class="meta">days · fix plan 1–8 · no new concepts</p>
+      <ul>
+        <li>Standing release path in the crate, readiness buffer for requests, sequential grant sync, close flushes, quoted purpose, padded releases, author on nodes, "Add to your data".</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h4>Phase 1 · Keys and specs</h4>
+      <p class="meta">about a week · API + Grains spec + vault</p>
+      <ul>
+        <li>Salt authority key in KMS (secp256k1, sign-only, the Grains hosted-agent pattern); its DID at <code>GET /api/.well-known/credential-authority</code> under a new <code>claims</code> section.</li>
+        <li>Claim key per person: generated on device, wrapped under the messages DEK beside the PGP key, registered on the account; a signed PGP↔DID binding; enrolment on next sign-in for existing accounts.</li>
+        <li>Agent DID on registration; <code>PATCH /api/v1/agents/did</code> for self-service, like the callback route.</li>
+        <li>Specs and vectors in the Grains repo: <code>personal-claim/0.1</code>, <code>salt-grant/0.1</code>, <code>salt-receipt/0.1</code>, <code>salt-attestation/0.1</code>; <code>grains verify</code> accepts a claim; vectors mirrored into salt-api tests.</li>
+        <li>Attestation endpoint, 24-hour documents, person-chosen standing fields.</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h4>Phase 2 · Signed protocol</h4>
+      <p class="meta">about two weeks · crate + worker + SDK + web</p>
+      <ul>
+        <li>Crate: claim builder (canonical JSON minus sig), tier and ceiling in evaluate, predicate operators, sensitive compartments, receipt records.</li>
+        <li>Worker: vendored noble-secp256k1, sign claims and receipts, verify request signatures, claim key in memory while open.</li>
+        <li>SDK: agent key, signed requests, <code>verifyClaim</code>, claim cache with expiry, receipts, revocation, dedup; salt-claude-agent hands claims to the model as data, never instructions.</li>
+        <li>Web: tier picker and ceiling on the Personal data card, predicates-only default for new agents, consent sheet shows predicates as questions, capture-at-answer chips.</li>
+        <li>Wire: claims in releases; grants countersigned on create and update.</li>
+      </ul>
+    </div>
+    <div class="phase">
+      <h4>Phase 3 · The store</h4>
+      <p class="meta">about two weeks · API + crate + worker</p>
+      <ul>
+        <li><code>lattice_frames</code>, cable event, pull-since, claims mutex; ULID records and server-seq ordering; OPFS as cache.</li>
+        <li>Per-compartment random keys, frame index in the AAD with a device high-water mark, compaction by snapshot, tombstone list in the manifest.</li>
+        <li>Dedup on proposals, singleton person, cascade delete, per-agent log index, schema version stamps.</li>
+        <li>Honest perf fixture: thousands of single writes, wall time gated, on the iOS Simulator.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ===== DECISIONS ===== -->
+  <section id="decisions">
+    <h2>Decisions to take</h2>
+    <p class="sub">Four calls the design makes that you may want to overrule. Each has a default and the reason for it.</p>
+    <div class="decide">
+      <p><strong>secp256k1 (ES256K) or P-256 (ES256) for the claim key?</strong> Default: secp256k1, because Grains, every agent runtime and every EVM wallet already speak it, and a Grains verifier checks a Salt claim with no new code. Cost: WebCrypto has no secp256k1, so the private key is raw bytes in worker memory while the store is open, signed by a vendored pure-JS library. P-256 would let WebCrypto hold it non-extractable, at the price of a second curve for every verifier. The PGP key is already raw in memory when openpgp.js uses it, so the posture is not new.</p>
+    </div>
+    <div class="decide">
+      <p><strong>A separate claim key or the PGP key?</strong> Default: separate. PGP signatures have no canonical JSON, no offline-verifiable compact form, and no place in Grains' receipt chain. The binding document ties the two so a contact who verified one has verified both.</p>
+    </div>
+    <div class="decide">
+      <p><strong>Where do the specs live?</strong> Default: the Grains repo, vendor-neutral, with Salt as the reference registrar and issuer, exactly as <code>credential-authority/0.1</code> is done today. The alternative, Salt-only specs, makes the claims Salt's format rather than a format Salt is the authority for, which is the weaker position for the vision.</p>
+    </div>
+    <div class="decide">
+      <p><strong>Default grant for a stranger's agent: predicates only, ceiling public?</strong> Default: yes. Most tasks need answers, not values, and it makes the first grant safe by construction. A person who wants an agent to hold values adds rules deliberately, and the picker says what each one exposes.</p>
+    </div>
+
+    <p class="foot">Builds on: salt-lattice <span class="mono">docs/DESIGN.md</span> and <span class="mono">docs/PROTOCOL.md</span> (kept where not named above), Grains <span class="mono">spec/identity.md</span> and <span class="mono">spec/receipts.md</span> (primitives inherited verbatim), salt-api <span class="mono">CREDENTIAL_AUTHORITY.md</span> (the precedent for a vendor-neutral spec with Salt as reference authority), and the findings in "Lattice Under Attack". Nothing here is built; every path named exists on the <span class="mono">lattice</span> branches as of 2026-09-15.</p>
+  </section>
+</div>
